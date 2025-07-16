@@ -1,4 +1,5 @@
 using OwlCore.Storage.System.IO;
+using OwlCore.Storage;
 using System.Collections.Concurrent;
 
 /// <summary>
@@ -7,6 +8,7 @@ using System.Collections.Concurrent;
 public static class ProtocolRegistry
 {
     private static readonly ConcurrentDictionary<string, IProtocolHandler> _protocolHandlers = new();
+    private static readonly ConcurrentDictionary<string, MountedFolderProtocolHandler> _mountedFolders = new();
     
     static ProtocolRegistry()
     {
@@ -83,5 +85,79 @@ public static class ProtocolRegistry
     public static IEnumerable<string> GetRegisteredProtocols()
     {
         return _protocolHandlers.Keys;
+    }
+
+    /// <summary>
+    /// Mounts an IFolder with a custom protocol scheme, making it available as a browsable drive
+    /// </summary>
+    /// <param name="folder">The folder to mount</param>
+    /// <param name="protocolScheme">The custom protocol scheme (e.g., "mydata", "project1")</param>
+    /// <param name="mountName">Display name for the mounted folder</param>
+    /// <returns>The root URI for the mounted folder</returns>
+    /// <exception cref="ArgumentException">Thrown if the protocol scheme is already registered</exception>
+    public static string MountFolder(IFolder folder, string protocolScheme, string mountName)
+    {
+        if (string.IsNullOrWhiteSpace(protocolScheme))
+            throw new ArgumentException("Protocol scheme cannot be null or empty", nameof(protocolScheme));
+        
+        if (string.IsNullOrWhiteSpace(mountName))
+            throw new ArgumentException("Mount name cannot be null or empty", nameof(mountName));
+
+        // Ensure protocol scheme doesn't conflict with existing protocols
+        if (_protocolHandlers.ContainsKey(protocolScheme))
+            throw new ArgumentException($"Protocol scheme '{protocolScheme}' is already registered", nameof(protocolScheme));
+
+        var handler = new MountedFolderProtocolHandler(folder, mountName, protocolScheme);
+        var rootUri = $"{protocolScheme}://";
+        
+        _protocolHandlers[protocolScheme] = handler;
+        _mountedFolders[protocolScheme] = handler;
+        
+        return rootUri;
+    }
+
+    /// <summary>
+    /// Unmounts a previously mounted folder by protocol scheme
+    /// </summary>
+    /// <param name="protocolScheme">The protocol scheme to unmount</param>
+    /// <returns>True if the folder was unmounted, false if it wasn't found or wasn't a mounted folder</returns>
+    public static bool UnmountFolder(string protocolScheme)
+    {
+        if (string.IsNullOrWhiteSpace(protocolScheme))
+            return false;
+
+        // Only allow unmounting of mounted folders, not built-in protocols
+        if (!_mountedFolders.ContainsKey(protocolScheme))
+            return false;
+
+        _protocolHandlers.TryRemove(protocolScheme, out _);
+        _mountedFolders.TryRemove(protocolScheme, out _);
+        
+        return true;
+    }
+
+    /// <summary>
+    /// Gets information about all mounted folders
+    /// </summary>
+    /// <returns>Array of mounted folder information</returns>
+    public static object[] GetMountedFolders()
+    {
+        return _mountedFolders.Values.Select(handler => new
+        {
+            protocolScheme = handler.ProtocolScheme,
+            mountName = handler.MountName,
+            rootUri = $"{handler.ProtocolScheme}://",
+            folderType = handler.MountedFolder.GetType().Name
+        }).ToArray();
+    }
+
+    /// <summary>
+    /// Checks if a protocol scheme represents a mounted folder
+    /// </summary>
+    /// <param name="protocolScheme">The protocol scheme to check</param>
+    /// <returns>True if it's a mounted folder, false otherwise</returns>
+    public static bool IsMountedFolder(string protocolScheme)
+    {
+        return _mountedFolders.ContainsKey(protocolScheme);
     }
 }

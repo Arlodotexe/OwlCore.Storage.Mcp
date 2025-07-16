@@ -512,4 +512,91 @@ public static class StorageTools
 
         return protocols.ToArray();
     }
+
+    [McpServerTool, Description("Mounts an existing folder as a browsable drive with a custom protocol scheme. The folder will appear in GetAvailableDrives() and can be browsed like any other drive.")]
+    public static async Task<object> MountFolder(
+        [Description("The ID or path of the folder to mount")] string folderId,
+        [Description("The custom protocol scheme to use (e.g., 'myproject', 'backup', 'archive')")] string protocolScheme,
+        [Description("Display name for the mounted folder")] string mountName)
+    {
+        if (string.IsNullOrWhiteSpace(folderId))
+            throw new ArgumentException("Folder ID cannot be null or empty", nameof(folderId));
+        
+        if (string.IsNullOrWhiteSpace(protocolScheme))
+            throw new ArgumentException("Protocol scheme cannot be null or empty", nameof(protocolScheme));
+        
+        if (string.IsNullOrWhiteSpace(mountName))
+            throw new ArgumentException("Mount name cannot be null or empty", nameof(mountName));
+
+        // Validate protocol scheme format
+        if (protocolScheme.Contains("://") || protocolScheme.Contains("/") || protocolScheme.Contains("\\"))
+            throw new ArgumentException("Protocol scheme must be a simple identifier without special characters", nameof(protocolScheme));
+
+        // Ensure the folder exists and is accessible
+        await EnsureStorableRegistered(folderId);
+        
+        if (!_storableRegistry.TryGetValue(folderId, out var registeredItem) || registeredItem is not IFolder folder)
+            throw new ArgumentException($"Folder with ID '{folderId}' not found", nameof(folderId));
+
+        try
+        {
+            var rootUri = ProtocolRegistry.MountFolder(folder, protocolScheme, mountName);
+            
+            // Register the mounted root in our storable registry
+            _storableRegistry[rootUri] = folder;
+            
+            return new
+            {
+                success = true,
+                rootUri = rootUri,
+                protocolScheme = protocolScheme,
+                mountName = mountName,
+                originalFolderId = folderId,
+                message = $"Successfully mounted '{mountName}' as {protocolScheme}://"
+            };
+        }
+        catch (ArgumentException ex)
+        {
+            throw new ArgumentException($"Failed to mount folder: {ex.Message}", ex);
+        }
+    }
+
+    [McpServerTool, Description("Unmounts a previously mounted folder, removing it from available drives.")]
+    public static object UnmountFolder(
+        [Description("The protocol scheme of the mounted folder to unmount")] string protocolScheme)
+    {
+        if (string.IsNullOrWhiteSpace(protocolScheme))
+            throw new ArgumentException("Protocol scheme cannot be null or empty", nameof(protocolScheme));
+
+        var wasUnmounted = ProtocolRegistry.UnmountFolder(protocolScheme);
+        
+        if (wasUnmounted)
+        {
+            // Remove from storable registry as well
+            var rootUri = $"{protocolScheme}://";
+            _storableRegistry.TryRemove(rootUri, out _);
+            
+            return new
+            {
+                success = true,
+                protocolScheme = protocolScheme,
+                message = $"Successfully unmounted {protocolScheme}://"
+            };
+        }
+        else
+        {
+            return new
+            {
+                success = false,
+                protocolScheme = protocolScheme,
+                message = $"Protocol scheme '{protocolScheme}' not found or is not a mounted folder"
+            };
+        }
+    }
+
+    [McpServerTool, Description("Lists all currently mounted folders and their information.")]
+    public static object[] GetMountedFolders()
+    {
+        return ProtocolRegistry.GetMountedFolders();
+    }
 }

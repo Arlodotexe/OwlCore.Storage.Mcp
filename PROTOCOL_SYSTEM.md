@@ -264,13 +264,96 @@ GetAvailableDrives() → includes filesystem protocols only
 2. **Consistency** - All protocols follow the same patterns
 3. **Maintainability** - Protocol-specific logic is isolated
 4. **Testability** - Each protocol can be tested independently
+5. **Dynamic Mounting** - Any `IFolder` can be mounted as a browsable drive
 
-## Migration from Hardcoded IPFS
+## Dynamic Folder Mounting
 
-The system automatically handles the migration from the old hardcoded `mfs://` checks to the new generalized approach:
+The protocol system now supports mounting any `IFolder` instance as a browsable drive with a custom protocol scheme. This allows you to:
 
-- `StartsWith("mfs://")` → `ProtocolRegistry.IsCustomProtocol(id)`
-- `CreateMfsItemId()` → `CreateCustomItemId()`
-- Protocol-specific drive info → `protocolHandler.GetDriveInfoAsync()`
+- Mount subfolders as separate drives for easier navigation
+- Create temporary mounts for specific projects or workflows  
+- Mount folders from other protocols as top-level drives
+- Organize complex folder hierarchies with meaningful names
 
-All existing IPFS MFS functionality remains unchanged from the user perspective.
+### Mounting a Folder
+
+Use the `MountFolder` tool to mount any accessible folder:
+
+```
+// Mount a subfolder as a separate drive
+MountFolder(
+    folderId: "C:/Projects/MyProject/src", 
+    protocolScheme: "myproject-src", 
+    mountName: "My Project Source"
+)
+
+// Mount an IPFS folder as a custom drive
+MountFolder(
+    folderId: "ipfs://QmProjectHash",
+    protocolScheme: "ipfs-project", 
+    mountName: "IPFS Project Archive"
+)
+
+// Mount a memory storage folder
+MountFolder(
+    folderId: "memory://temp/workspace",
+    protocolScheme: "workspace",
+    mountName: "Current Workspace"
+)
+```
+
+After mounting, the folder appears in `GetAvailableDrives()` and can be browsed like any other drive:
+
+```
+GetAvailableDrives() → includes "myproject-src://" 
+GetFolderItems("myproject-src://") → lists mounted folder contents
+```
+
+### Unmounting a Folder
+
+Use the `UnmountFolder` tool to remove a mounted folder:
+
+```
+UnmountFolder("myproject-src")
+```
+
+### Listing Mounted Folders
+
+Use the `GetMountedFolders` tool to see all currently mounted folders:
+
+```
+GetMountedFolders() → returns array of mounted folder information
+```
+
+### Example Workflow: Project Organization
+
+```
+// Start with a project folder
+GetFolderItems("C:/Projects/LargeProject/")
+→ [src/, docs/, tests/, assets/, build/]
+
+// Mount key subfolders for easier access
+MountFolder("C:/Projects/LargeProject/src", "proj-src", "Project Source")
+MountFolder("C:/Projects/LargeProject/docs", "proj-docs", "Project Documentation") 
+MountFolder("C:/Projects/LargeProject/tests", "proj-tests", "Project Tests")
+
+// Now they appear as top-level drives
+GetAvailableDrives()
+→ includes "proj-src://", "proj-docs://", "proj-tests://"
+
+// Direct access to project areas
+GetFolderItems("proj-src://") → lists source files
+GetFolderItems("proj-docs://") → lists documentation files
+
+// Unmount when done
+UnmountFolder("proj-src")
+UnmountFolder("proj-docs") 
+UnmountFolder("proj-tests")
+```
+
+### Security and Limitations
+
+- Protocol schemes must be simple identifiers (no special characters)
+- Cannot override built-in protocol schemes (mfs, http, https, ipfs, ipns, memory)
+- Mounted folders inherit the permissions and capabilities of the underlying `IFolder`
+- Unmounting removes the drive but doesn't affect the original folder
