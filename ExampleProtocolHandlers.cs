@@ -6,7 +6,9 @@ using OwlCore.Storage;
 /// </summary>
 public class S3ProtocolHandler : IProtocolHandler
 {
-    public Task<IStorable> CreateRootAsync(string rootUri)
+    public bool HasBrowsableRoot => true; // S3 buckets have browsable roots
+
+    public Task<IStorable?> CreateRootAsync(string rootUri)
     {
         // Example: s3://bucket-name/path
         var bucketName = ExtractBucketName(rootUri);
@@ -14,9 +16,15 @@ public class S3ProtocolHandler : IProtocolHandler
         
         // This would require implementing S3Folder class that implements IFolder
         // var s3Root = new S3Folder(bucketName, path, awsCredentials);
-        // return Task.FromResult<IStorable>(s3Root);
+        // return Task.FromResult<IStorable?>(s3Root);
         
         throw new NotImplementedException("S3 protocol handler needs S3Folder implementation");
+    }
+
+    public Task<IStorable?> CreateResourceAsync(string resourceUri)
+    {
+        // S3 doesn't support direct resource creation - items are accessed through the filesystem
+        return Task.FromResult<IStorable?>(null);
     }
 
     public string CreateItemId(string parentId, string itemName)
@@ -29,12 +37,12 @@ public class S3ProtocolHandler : IProtocolHandler
         return $"{parentId}/{itemName}";
     }
 
-    public async Task<object> GetDriveInfoAsync(string rootUri)
+    public Task<object?> GetDriveInfoAsync(string rootUri)
     {
         // In a real implementation, you'd query S3 for bucket information
         var bucketName = ExtractBucketName(rootUri);
         
-        return new
+        var result = new
         {
             id = rootUri,
             name = $"S3 Bucket: {bucketName}",
@@ -44,6 +52,8 @@ public class S3ProtocolHandler : IProtocolHandler
             totalSize = -1L, // S3 doesn't have size limits
             availableFreeSpace = -1L
         };
+
+        return Task.FromResult<object?>(result);
     }
 
     public bool NeedsRegistration(string id)
@@ -73,7 +83,9 @@ public class S3ProtocolHandler : IProtocolHandler
 /// </summary>
 public class AzureBlobProtocolHandler : IProtocolHandler
 {
-    public Task<IStorable> CreateRootAsync(string rootUri)
+    public bool HasBrowsableRoot => true; // Azure Blob containers have browsable roots
+
+    public Task<IStorable?> CreateRootAsync(string rootUri)
     {
         // Example: azure-blob://accountname/container/path
         var accountName = ExtractAccountName(rootUri);
@@ -82,9 +94,15 @@ public class AzureBlobProtocolHandler : IProtocolHandler
         
         // This would require implementing AzureBlobFolder class that implements IFolder
         // var blobRoot = new AzureBlobFolder(accountName, containerName, path, credentials);
-        // return Task.FromResult<IStorable>(blobRoot);
+        // return Task.FromResult<IStorable?>(blobRoot);
         
         throw new NotImplementedException("Azure Blob protocol handler needs AzureBlobFolder implementation");
+    }
+
+    public Task<IStorable?> CreateResourceAsync(string resourceUri)
+    {
+        // Azure Blob doesn't support direct resource creation - items are accessed through the filesystem
+        return Task.FromResult<IStorable?>(null);
     }
 
     public string CreateItemId(string parentId, string itemName)
@@ -97,12 +115,12 @@ public class AzureBlobProtocolHandler : IProtocolHandler
         return $"{parentId}/{itemName}";
     }
 
-    public async Task<object> GetDriveInfoAsync(string rootUri)
+    public Task<object?> GetDriveInfoAsync(string rootUri)
     {
         var accountName = ExtractAccountName(rootUri);
         var containerName = ExtractContainerName(rootUri);
         
-        return new
+        var result = new
         {
             id = rootUri,
             name = $"Azure Blob: {accountName}/{containerName}",
@@ -112,6 +130,8 @@ public class AzureBlobProtocolHandler : IProtocolHandler
             totalSize = -1L, // Azure Blob doesn't have fixed size limits
             availableFreeSpace = -1L
         };
+
+        return Task.FromResult<object?>(result);
     }
 
     public bool NeedsRegistration(string id)

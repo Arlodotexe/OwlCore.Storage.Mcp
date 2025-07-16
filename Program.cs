@@ -21,9 +21,6 @@ builder.Services
     .WithStdioServerTransport()
     .WithToolsFromAssembly();
 
-// Simple storage registry 
-var storableRegistry = new ConcurrentDictionary<string, IStorable>();
-
 await builder.Build().RunAsync();
 
 // [McpServerToolType]

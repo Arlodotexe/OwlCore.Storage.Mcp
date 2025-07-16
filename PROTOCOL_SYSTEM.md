@@ -8,7 +8,24 @@ The protocol system consists of:
 
 1. **ProtocolRegistry** - Central registry for managing protocol handlers
 2. **IProtocolHandler** - Interface that protocol implementations must implement
-3. **Built-in handlers** - Currently includes IPFS MFS handler
+3. **Built-in handlers** - Currently includes IPFS MFS, HTTP/HTTPS, and Memory storage handlers
+
+## Protocol Types
+
+The system now supports two types of protocols:
+
+### Filesystem Protocols
+These protocols have browsable roots that appear in `GetAvailableDrives()`:
+- **IPFS MFS** (`mfs://`) - Mutable File System for IPFS
+- **Memory Storage** (`memory://`) - In-memory temporary storage
+- **Azure Blob** (`azure-blob://`) - Container-based blob storage (example)
+- **S3** (`s3://`) - Amazon S3 bucket storage (example)
+
+### Resource Protocols  
+These protocols address individual resources directly without browsable roots:
+- **HTTP/HTTPS** (`http://`, `https://`) - Individual web resources and files
+- **IPFS** (`ipfs://`) - IPFS content addressed by hash (files or folders)
+- **IPNS** (`ipns://`) - IPNS names that resolve to IPFS content (files or folders)
 
 ## How to Add a New Protocol
 
@@ -19,11 +36,27 @@ Implement the `IProtocolHandler` interface:
 ```csharp
 public class MyCustomProtocolHandler : IProtocolHandler
 {
-    public Task<IStorable> CreateRootAsync(string rootUri)
+    // Indicates if this protocol has browsable roots (shows up in GetAvailableDrives)
+    public bool HasBrowsableRoot => true; // or false for resource-only protocols
+
+    public Task<IStorable?> CreateRootAsync(string rootUri)
     {
-        // Create and return the root storage item for your protocol
+        // For filesystem protocols: Create and return the root storage item
+        // For resource protocols: Return null
+        if (!HasBrowsableRoot) return Task.FromResult<IStorable?>(null);
+        
         var customRoot = new MyCustomStorageRoot(rootUri);
-        return Task.FromResult<IStorable>(customRoot);
+        return Task.FromResult<IStorable?>(customRoot);
+    }
+
+    public Task<IStorable?> CreateResourceAsync(string resourceUri)
+    {
+        // For resource protocols: Create storage item directly from URI
+        // For filesystem protocols: Return null (items accessed via filesystem navigation)
+        if (HasBrowsableRoot) return Task.FromResult<IStorable?>(null);
+        
+        var resource = new MyCustomResource(resourceUri);
+        return Task.FromResult<IStorable?>(resource);
     }
 
     public string CreateItemId(string parentId, string itemName)
@@ -32,9 +65,11 @@ public class MyCustomProtocolHandler : IProtocolHandler
         return parentId == "mycustom://" ? $"mycustom://{itemName}" : $"{parentId}/{itemName}";
     }
 
-    public async Task<object> GetDriveInfoAsync(string rootUri)
+    public async Task<object?> GetDriveInfoAsync(string rootUri)
     {
-        // Return drive information for your protocol
+        // Return drive information for filesystem protocols, null for resource protocols
+        if (!HasBrowsableRoot) return null;
+        
         return new
         {
             id = rootUri,
@@ -65,6 +100,8 @@ static ProtocolRegistry()
 {
     // Register built-in protocol handlers
     RegisterProtocol("mfs", new IpfsMfsProtocolHandler());
+    RegisterProtocol("http", new HttpProtocolHandler());
+    RegisterProtocol("https", new HttpProtocolHandler());
     
     // Add your custom protocol
     RegisterProtocol("mycustom", new MyCustomProtocolHandler());
@@ -80,6 +117,59 @@ Your custom storage classes need to implement the appropriate OwlCore.Storage in
 - `IFile` - For file items
 - `IModifiableFolder` - For folders that can be modified
 - `IStorableChild` - For items that have a parent
+
+## Built-in Examples
+
+### HTTP File Protocol
+
+The HTTP protocol handler demonstrates resource-based protocols:
+
+```csharp
+public class HttpProtocolHandler : IProtocolHandler
+{
+    public bool HasBrowsableRoot => false; // No browsable filesystem
+
+    public Task<IStorable?> CreateRootAsync(string rootUri) => 
+        Task.FromResult<IStorable?>(null); // No root to browse
+
+    public Task<IStorable?> CreateResourceAsync(string resourceUri)
+    {
+        // Create HttpFile directly from URL
+        var httpFile = new HttpFile(resourceUri, _httpClient);
+        return Task.FromResult<IStorable?>(httpFile);
+    }
+
+    // ... other methods
+}
+```
+
+Usage: When the agent calls `OpenFileForReading("https://example.com/file.pdf")`, the system automatically creates an `HttpFile` instance for that URL.
+
+### Memory Storage Protocol
+
+The Memory protocol handler demonstrates filesystem-based protocols:
+
+```csharp
+public class MemoryProtocolHandler : IProtocolHandler
+{
+    public bool HasBrowsableRoot => true; // Has browsable filesystem
+
+    public Task<IStorable?> CreateRootAsync(string rootUri)
+    {
+        // Create in-memory folder hierarchy
+        var spaceName = ExtractSpaceName(rootUri);
+        var memoryRoot = new MemoryFolder(spaceName, spaceName);
+        return Task.FromResult<IStorable?>(memoryRoot);
+    }
+
+    public Task<IStorable?> CreateResourceAsync(string resourceUri) => 
+        Task.FromResult<IStorable?>(null); // Use filesystem navigation
+
+    // ... other methods
+}
+```
+
+Usage: Shows up in `GetAvailableDrives()` as "Memory Storage: spacename" and can be browsed like a regular filesystem.
 
 ## Example: Azure Blob Storage Protocol
 
@@ -123,6 +213,49 @@ public class AzureBlobProtocolHandler : IProtocolHandler
 
     public bool NeedsRegistration(string id) => false;
 }
+```
+
+## Usage Examples
+
+### Filesystem Protocols
+These protocols appear in `GetAvailableDrives()` and can be browsed like traditional file systems:
+
+```
+// Browse IPFS MFS root
+GetAvailableDrives() → includes "mfs://" 
+GetFolderItems("mfs://") → lists MFS root contents
+
+// Browse memory storage
+GetAvailableDrives() → includes "memory://" 
+GetFolderItems("memory://") → lists memory storage contents
+```
+
+### Resource Protocols  
+These protocols support direct resource access without browsable roots:
+
+```
+// Read HTTP file directly
+ReadFileAsBytes("https://example.com/file.txt")
+ReadFileAsTextWithEncoding("https://example.com/data.json")
+
+// Access IPFS content by hash
+ReadFileAsBytes("ipfs://QmHash...")
+GetFolderItems("ipfs://QmFolderHash...")  // If the hash points to a folder
+
+// Access IPNS content by name
+ReadFileAsTextWithEncoding("ipns://example.com")
+GetFolderItems("ipns://example.com")  // If the IPNS name resolves to a folder
+```
+
+### Protocol Discovery
+Use the built-in tools to discover what's available:
+
+```
+// See all supported protocols
+GetSupportedProtocols() → lists all registered protocols and their capabilities
+
+// Get available browsable drives/roots
+GetAvailableDrives() → includes filesystem protocols only
 ```
 
 ## Benefits of the Generalized System

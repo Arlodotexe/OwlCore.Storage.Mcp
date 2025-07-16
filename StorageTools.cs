@@ -12,7 +12,7 @@ public static class StorageTools
 {
     internal static readonly ConcurrentDictionary<string, IStorable> _storableRegistry = new();
 
-    internal static void EnsureStorableRegistered(string id)
+    internal static async Task EnsureStorableRegistered(string id)
     {
         if (_storableRegistry.ContainsKey(id)) return;
 
@@ -20,7 +20,15 @@ public static class StorageTools
         var protocolHandler = ProtocolRegistry.GetProtocolHandler(id);
         if (protocolHandler != null)
         {
-            // Let the protocol handler decide if registration is needed
+            // Try to create a direct resource first (for protocols like HTTP)
+            var resource = await protocolHandler.CreateResourceAsync(id);
+            if (resource != null)
+            {
+                _storableRegistry[id] = resource;
+                return;
+            }
+
+            // Let the protocol handler decide if registration is needed for filesystem-style protocols
             if (!protocolHandler.NeedsRegistration(id)) return;
         }
 
@@ -36,7 +44,7 @@ public static class StorageTools
         return ProtocolRegistry.CreateCustomItemId(parentId, itemName);
     }
 
-    [McpServerTool, Description("Gets the paths of the available drives including IPFS MFS")]
+    [McpServerTool, Description("Gets the paths of the available drives including IPFS MFS, Memory storage, and other custom protocol roots")]
     public static async Task<object[]> GetAvailableDrives()
     {
         var driveInfos = new List<object>();
@@ -70,25 +78,31 @@ public static class StorageTools
             }
         }
 
-        // Add custom protocol roots
+        // Add custom protocol roots (only for protocols that have browsable roots)
         foreach (var protocolScheme in ProtocolRegistry.GetRegisteredProtocols())
         {
             var rootUri = $"{protocolScheme}://";
             try
             {
                 var protocolHandler = ProtocolRegistry.GetProtocolHandler(rootUri);
-                if (protocolHandler == null) continue;
+                if (protocolHandler == null || !protocolHandler.HasBrowsableRoot) continue;
 
                 // Only register root if not already registered
                 if (!_storableRegistry.ContainsKey(rootUri))
                 {
                     var protocolRoot = await protocolHandler.CreateRootAsync(rootUri);
-                    _storableRegistry[rootUri] = protocolRoot;
+                    if (protocolRoot != null)
+                    {
+                        _storableRegistry[rootUri] = protocolRoot;
+                    }
                 }
                 
                 // Get drive information from the protocol handler
                 var driveInfo = await protocolHandler.GetDriveInfoAsync(rootUri);
-                driveInfos.Add(driveInfo);
+                if (driveInfo != null)
+                {
+                    driveInfos.Add(driveInfo);
+                }
             }
             catch (Exception ex)
             {
@@ -100,10 +114,10 @@ public static class StorageTools
         return driveInfos.ToArray();
     }
 
-    [McpServerTool, Description("Lists all items in a folder by ID or path. Returns array of items with their IDs, names, and types.")]
+    [McpServerTool, Description("Lists all items in a folder by ID or path. Works with local folders, IPFS MFS, and IPFS/IPNS folder hashes. Returns array of items with their IDs, names, and types.")]
     public static async Task<object[]> GetFolderItems(string folderId)
     {
-        EnsureStorableRegistered(folderId);
+        await EnsureStorableRegistered(folderId);
 
         if (!_storableRegistry.TryGetValue(folderId, out var registeredItem) || registeredItem is not IFolder folder)
             throw new ArgumentException($"Folder with ID '{folderId}' not found");
@@ -133,7 +147,7 @@ public static class StorageTools
     [McpServerTool, Description("Lists only files in a folder by ID or path. Returns array of file items.")]
     public static async Task<object[]> GetFolderFiles(string folderId)
     {
-        EnsureStorableRegistered(folderId);
+        await EnsureStorableRegistered(folderId);
 
         if (!_storableRegistry.TryGetValue(folderId, out var registeredItem) || registeredItem is not IFolder folder)
             throw new ArgumentException($"Folder with ID '{folderId}' not found");
@@ -158,7 +172,7 @@ public static class StorageTools
     [McpServerTool, Description("Lists only folders in a folder by ID or path. Returns array of folder items.")]
     public static async Task<object[]> GetFolderSubfolders(string folderId)
     {
-        EnsureStorableRegistered(folderId);
+        await EnsureStorableRegistered(folderId);
 
         if (!_storableRegistry.TryGetValue(folderId, out var registeredItem) || registeredItem is not IFolder folder)
             throw new ArgumentException($"Folder with ID '{folderId}' not found");
@@ -183,7 +197,7 @@ public static class StorageTools
     [McpServerTool, Description("Recursively searches for an item by ID in a folder and all its subfolders.")]
     public static async Task<object?> FindItemRecursively(string folderId, string targetItemId)
     {
-        EnsureStorableRegistered(folderId);
+        await EnsureStorableRegistered(folderId);
 
         if (!_storableRegistry.TryGetValue(folderId, out var registeredItem) || registeredItem is not IFolder folder)
             throw new ArgumentException($"Folder with ID '{folderId}' not found");
@@ -214,7 +228,7 @@ public static class StorageTools
     [McpServerTool, Description("Navigates to an item using a relative path from a starting item.")]
     public static async Task<object> GetItemByRelativePath(string startingItemId, string relativePath)
     {
-        EnsureStorableRegistered(startingItemId);
+        await EnsureStorableRegistered(startingItemId);
 
         if (!_storableRegistry.TryGetValue(startingItemId, out var startingItem))
             throw new ArgumentException($"Starting item with ID '{startingItemId}' not found");
@@ -238,8 +252,8 @@ public static class StorageTools
     [McpServerTool, Description("Gets the relative path from one folder to another item.")]
     public static async Task<string> GetRelativePath(string fromFolderId, string toItemId)
     {
-        EnsureStorableRegistered(fromFolderId);
-        EnsureStorableRegistered(toItemId);
+        await EnsureStorableRegistered(fromFolderId);
+        await EnsureStorableRegistered(toItemId);
 
         if (!_storableRegistry.TryGetValue(fromFolderId, out var fromItem) || fromItem is not IFolder fromFolder)
             throw new ArgumentException($"From folder with ID '{fromFolderId}' not found or not a folder");
@@ -250,10 +264,10 @@ public static class StorageTools
         return await fromFolder.GetRelativePathToAsync(toChild);
     }
 
-    [McpServerTool, Description("Reads the content of a file as bytes by file ID or path.")]
+    [McpServerTool, Description("Reads the content of a file as bytes by file ID, path, or URL (supports HTTP/HTTPS URLs, IPFS hashes, and IPNS names).")]
     public static async Task<byte[]> ReadFileAsBytes(string fileId)
     {
-        EnsureStorableRegistered(fileId);
+        await EnsureStorableRegistered(fileId);
 
         if (!_storableRegistry.TryGetValue(fileId, out var item) || item is not IFile file)
             throw new ArgumentException($"File with ID '{fileId}' not found");
@@ -261,10 +275,10 @@ public static class StorageTools
         return await file.ReadBytesAsync(CancellationToken.None);
     }
 
-    [McpServerTool, Description("Reads the content of a file as text with specified encoding by file ID or path.")]
+    [McpServerTool, Description("Reads the content of a file as text with specified encoding by file ID, path, or URL (supports HTTP/HTTPS URLs, IPFS hashes, and IPNS names).")]
     public static async Task<string> ReadFileAsTextWithEncoding(string fileId, string encoding = "UTF-8")
     {
-        EnsureStorableRegistered(fileId);
+        await EnsureStorableRegistered(fileId);
 
         if (!_storableRegistry.TryGetValue(fileId, out var item) || item is not IFile file)
             throw new ArgumentException($"File with ID '{fileId}' not found");
@@ -281,33 +295,13 @@ public static class StorageTools
         return await file.ReadTextAsync(textEncoding, CancellationToken.None);
     }
 
-    [McpServerTool, Description("Opens a file stream for reading by file ID or path. Returns stream information.")]
-    public static async Task<object> OpenFileForReading(string fileId)
+    [McpServerTool, Description("Gets information about a seen storable item by ID, path, or URL")]
+    public static async Task<object?> GetStorableInfo(string id)
     {
-        EnsureStorableRegistered(fileId);
+        await EnsureStorableRegistered(id);
 
-        if (!_storableRegistry.TryGetValue(fileId, out var item) || item is not IFile file)
-            throw new ArgumentException($"File with ID '{fileId}' not found");
-
-        using var stream = await file.OpenReadAsync();
-        
-        return new
-        {
-            id = fileId,
-            name = file.Name,
-            canRead = stream.CanRead,
-            canWrite = stream.CanWrite,
-            canSeek = stream.CanSeek,
-            length = stream.CanSeek ? stream.Length : -1,
-            position = stream.CanSeek ? stream.Position : -1
-        };
-    }
-
-    [McpServerTool, Description("Gets information about a seen storable item by ID")]
-    public static object? GetStorableInfo(string id)
-    {
         if (!_storableRegistry.TryGetValue(id, out var storable))
-            throw new ArgumentException($"Folder with ID '{id}' not found");
+            throw new ArgumentException($"Item with ID '{id}' not found");
 
         return new
         {
@@ -325,7 +319,7 @@ public static class StorageTools
     [McpServerTool, Description("Gets the root folder of a storage item by tracing up the parent hierarchy.")]
     public static async Task<object?> GetRootFolder(string itemId)
     {
-        EnsureStorableRegistered(itemId);
+        await EnsureStorableRegistered(itemId);
 
         if (!_storableRegistry.TryGetValue(itemId, out var item) || item is not IStorableChild storableChild)
             throw new ArgumentException($"Item with ID '{itemId}' not found or not a child item");
@@ -347,7 +341,7 @@ public static class StorageTools
     [McpServerTool, Description("Gets a specific item by ID from a folder.")]
     public static async Task<object> GetItemById(string folderId, string itemId)
     {
-        EnsureStorableRegistered(folderId);
+        await EnsureStorableRegistered(folderId);
 
         if (!_storableRegistry.TryGetValue(folderId, out var registeredItem) || registeredItem is not IFolder folder)
             throw new ArgumentException($"Folder with ID '{folderId}' not found");
@@ -378,7 +372,7 @@ public static class StorageTools
     [McpServerTool, Description("Gets the parent folder of a storage item.")]
     public static async Task<object?> GetParentFolder(string itemId)
     {
-        EnsureStorableRegistered(itemId);
+        await EnsureStorableRegistered(itemId);
 
         if (!_storableRegistry.TryGetValue(itemId, out var item) || item is not IStorableChild storableChild)
             throw new ArgumentException($"Item with ID '{itemId}' not found or not a child item");
@@ -395,5 +389,52 @@ public static class StorageTools
             name = parentFolder.Name,
             type = "folder"
         };
+    }
+
+    [McpServerTool, Description("Lists all supported storage protocols and their capabilities")]
+    public static object[] GetSupportedProtocols()
+    {
+        var protocols = new List<object>();
+
+        // Add built-in filesystem support
+        protocols.Add(new
+        {
+            scheme = "file",
+            name = "Local File System",
+            type = "filesystem",
+            hasBrowsableRoot = true,
+            supportsDirectResources = false,
+            description = "Local disk drives and folders"
+        });
+
+        // Add custom protocols
+        foreach (var protocolScheme in ProtocolRegistry.GetRegisteredProtocols())
+        {
+            var rootUri = $"{protocolScheme}://";
+            var protocolHandler = ProtocolRegistry.GetProtocolHandler(rootUri);
+            
+            if (protocolHandler != null)
+            {
+                protocols.Add(new
+                {
+                    scheme = protocolScheme,
+                    name = protocolScheme.ToUpper() + " Protocol",
+                    type = protocolHandler.HasBrowsableRoot ? "filesystem" : "resource",
+                    hasBrowsableRoot = protocolHandler.HasBrowsableRoot,
+                    supportsDirectResources = !protocolHandler.HasBrowsableRoot,
+                    description = protocolScheme switch
+                    {
+                        "mfs" => "IPFS Mutable File System - browsable IPFS storage",
+                        "memory" => "In-memory temporary storage for testing",
+                        "http" or "https" => "HTTP/HTTPS web resources and files",
+                        "ipfs" => "IPFS content addressed by hash - files or folders accessible by hash",
+                        "ipns" => "IPNS names that resolve to IPFS content - files or folders accessible by name",
+                        _ => $"Custom {protocolScheme} protocol"
+                    }
+                });
+            }
+        }
+
+        return protocols.ToArray();
     }
 }

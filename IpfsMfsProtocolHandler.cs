@@ -7,10 +7,18 @@ using Ipfs.Http;
 /// </summary>
 public class IpfsMfsProtocolHandler : IProtocolHandler
 {
-    public Task<IStorable> CreateRootAsync(string rootUri)
+    public bool HasBrowsableRoot => true; // MFS has a browsable root filesystem
+
+    public Task<IStorable?> CreateRootAsync(string rootUri)
     {
         var client = new IpfsClient();
-        return Task.FromResult<IStorable>(new MfsFolder("/", client));
+        return Task.FromResult<IStorable?>(new MfsFolder("/", client));
+    }
+
+    public Task<IStorable?> CreateResourceAsync(string resourceUri)
+    {
+        // MFS doesn't support direct resource creation - items are accessed through the filesystem
+        return Task.FromResult<IStorable?>(null);
     }
 
     public string CreateItemId(string parentId, string itemName)
@@ -18,7 +26,7 @@ public class IpfsMfsProtocolHandler : IProtocolHandler
         return parentId == "mfs://" ? $"mfs://{itemName}" : $"{parentId}/{itemName}";
     }
 
-    public async Task<object> GetDriveInfoAsync(string rootUri)
+    public async Task<object?> GetDriveInfoAsync(string rootUri)
     {
         try
         {
