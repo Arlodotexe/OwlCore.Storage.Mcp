@@ -541,7 +541,7 @@ public static class StorageTools
     }
 
     [McpServerTool, Description("Reads the content of a file as text with specified encoding by file ID, path, or URL (supports HTTP/HTTPS URLs, IPFS hashes, and IPNS names).")]
-    public static async Task<string> ReadFileAsTextWithEncoding(string fileId, string encoding = "UTF-8")
+    public static async Task<string> ReadFileAsText(string fileId, string encoding = "UTF-8")
     {
         try
         {
