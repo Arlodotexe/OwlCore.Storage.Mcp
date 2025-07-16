@@ -1,4 +1,4 @@
-# OwlCore.Storage.Mcp [![Version](https://img.shields.io/nuget/v/OwlCore.Storage.Mcp.svg)](https://www.nuget.org/packages/OwlCore.Storage.Mcp)
+# OwlCore.Storage.Mcp
 
 A Model Context Protocol (MCP) server that provides unified storage operations across multiple protocols including local files, IPFS MFS, HTTP/HTTPS, and custom mounted folders.
 
