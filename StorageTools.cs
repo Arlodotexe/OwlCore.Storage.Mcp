@@ -403,7 +403,7 @@ public static class StorageTools
         }
     }
 
-    [McpServerTool, Description("Recursively searches for an item by ID in a folder and all its subfolders.")]
+    [McpServerTool, Description("Finds an item with a known ID by recursively searching through a folder hierarchy. The targetItemId must be a known storable ID, not a filename or search term.")]
     public static async Task<object?> FindItemRecursively(string folderId, string targetItemId)
     {
         try
