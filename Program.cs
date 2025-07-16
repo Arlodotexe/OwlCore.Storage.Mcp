@@ -2,8 +2,10 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
+using ModelContextProtocol;
 using System.ComponentModel;
 using OwlCore.Storage;
+using OwlCore.Storage.Mcp;
 using System.Text;
 using System.Collections.Concurrent;
 using ModelContextProtocol.Protocol;
@@ -58,4 +60,60 @@ public static class CalculatorTool
 
     [McpServerTool, Description("Divides the first number by the second.")]
     public static double Divide(double a, double b) => b != 0 ? a / b : throw new ArgumentException("Division by zero is not allowed");
+}
+
+[McpServerToolType]
+public static class FileLauncherTool
+{
+    [McpServerTool, Description("Starts/launches a file with the system's default application. Supports protocol aliases (e.g., myproject://file.txt, mfs://document.pdf).")]
+    public static string StartFile(string filePath)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(filePath))
+                throw new McpException("File path cannot be empty", McpErrorCode.InvalidParams);
+
+            // Resolve any protocol aliases to actual file paths
+            var resolvedPath = ProtocolRegistry.ResolveAliasToFullId(filePath);
+            
+            // Check if the resolved path is a local file that exists
+            if (!File.Exists(resolvedPath))
+            {
+                // If the original path was different from resolved, show both in error
+                if (resolvedPath != filePath)
+                    throw new McpException($"File not found. Original path: '{filePath}', Resolved path: '{resolvedPath}'", McpErrorCode.InvalidParams);
+                else
+                    throw new McpException($"File not found: '{filePath}'", McpErrorCode.InvalidParams);
+            }
+
+            var processStartInfo = new ProcessStartInfo
+            {
+                FileName = resolvedPath,
+                UseShellExecute = true
+            };
+
+            var process = Process.Start(processStartInfo);
+            
+            if (process != null)
+            {
+                // Show both original and resolved paths if they differ
+                if (resolvedPath != filePath)
+                    return $"Successfully started file: '{filePath}' (resolved to: '{resolvedPath}')";
+                else
+                    return $"Successfully started file: '{filePath}'";
+            }
+            else
+            {
+                throw new McpException($"Failed to start file: '{filePath}'", McpErrorCode.InternalError);
+            }
+        }
+        catch (McpException)
+        {
+            throw; // Re-throw MCP exceptions as-is
+        }
+        catch (Exception ex)
+        {
+            throw new McpException($"Failed to start file '{filePath}': {ex.Message}", ex, McpErrorCode.InternalError);
+        }
+    }
 }
