@@ -72,97 +72,127 @@ public static class StorageTools
         // Ensure the storage system is fully initialized first
         await EnsureInitializedAsync();
         
+        // Try the original ID first
         if (_storableRegistry.ContainsKey(id)) 
         {
             Console.WriteLine($"[STORAGE] Item already registered: {id}");
             return;
         }
 
-        Console.WriteLine($"[STORAGE] Registering item: {id}");
+        // If not found, try resolving it as a potential alias
+        var resolvedId = ProtocolRegistry.ResolveAliasToFullId(id);
+        if (resolvedId != id && _storableRegistry.TryGetValue(resolvedId, out var resolvedItem))
+        {
+            // Register the alias to point to the same resolved item
+            _storableRegistry[id] = resolvedItem;
+            Console.WriteLine($"[STORAGE] Alias {id} resolved to existing item: {resolvedId}");
+            return;
+        }
+
+        // Use the resolved ID for registration attempts
+        var registrationId = resolvedId;
+        Console.WriteLine($"[STORAGE] Registering item: {registrationId}");
 
         try
         {
             // Check if this is a custom protocol
-            var protocolHandler = ProtocolRegistry.GetProtocolHandler(id);
+            var protocolHandler = ProtocolRegistry.GetProtocolHandler(registrationId);
             if (protocolHandler != null)
             {
-                Console.WriteLine($"[STORAGE] Found protocol handler for {id}: {protocolHandler.GetType().Name}");
+                Console.WriteLine($"[STORAGE] Found protocol handler for {registrationId}: {protocolHandler.GetType().Name}");
                 
                 // For filesystem protocols, try to create a root if this looks like a root URI
-                if (protocolHandler.HasBrowsableRoot && id.EndsWith("://"))
+                if (protocolHandler.HasBrowsableRoot && registrationId.EndsWith("://"))
                 {
-                    Console.WriteLine($"[STORAGE] Creating root for filesystem protocol: {id}");
-                    var root = await protocolHandler.CreateRootAsync(id);
+                    Console.WriteLine($"[STORAGE] Creating root for filesystem protocol: {registrationId}");
+                    var root = await protocolHandler.CreateRootAsync(registrationId);
                     if (root != null)
                     {
-                        _storableRegistry[id] = root;
-                        Console.WriteLine($"[STORAGE] Successfully registered root: {id} as {root.GetType().Name}");
+                        _storableRegistry[registrationId] = root;
+                        // Also register the original alias if different
+                        if (id != registrationId)
+                            _storableRegistry[id] = root;
+                        Console.WriteLine($"[STORAGE] Successfully registered root: {registrationId} as {root.GetType().Name}");
                         return;
                     }
                 }
 
                 // Try to create a direct resource first (for protocols like HTTP or specific resource URIs)
-                Console.WriteLine($"[STORAGE] Creating resource for: {id}");
-                var resource = await protocolHandler.CreateResourceAsync(id);
+                Console.WriteLine($"[STORAGE] Creating resource for: {registrationId}");
+                var resource = await protocolHandler.CreateResourceAsync(registrationId);
                 if (resource != null)
                 {
-                    _storableRegistry[id] = resource;
-                    Console.WriteLine($"[STORAGE] Successfully registered resource: {id} as {resource.GetType().Name}");
+                    _storableRegistry[registrationId] = resource;
+                    // Also register the original alias if different
+                    if (id != registrationId)
+                        _storableRegistry[id] = resource;
+                    Console.WriteLine($"[STORAGE] Successfully registered resource: {registrationId} as {resource.GetType().Name}");
                     return;
                 }
 
                 // Let the protocol handler decide if registration is needed for filesystem-style protocols
-                if (!protocolHandler.NeedsRegistration(id)) 
+                if (!protocolHandler.NeedsRegistration(registrationId)) 
                 {
                     // Special case: For mounted folder protocols, we still need to register specific items
                     // even if the protocol handler says registration isn't needed
-                    if (protocolHandler is MountedFolderProtocolHandler mountHandler && !id.EndsWith("://"))
+                    if (protocolHandler is MountedFolderProtocolHandler mountHandler && !registrationId.EndsWith("://"))
                     {
                         // This is a specific path within a mounted folder - we need to navigate to it
                         try
                         {
-                            var relativePath = id.Substring($"{mountHandler.ProtocolScheme}://".Length);
+                            var relativePath = registrationId.Substring($"{mountHandler.ProtocolScheme}://".Length);
                             if (!string.IsNullOrEmpty(relativePath))
                             {
                                 var targetItem = await mountHandler.MountedFolder.GetItemByRelativePathAsync(relativePath);
-                                _storableRegistry[id] = targetItem;
-                                Console.WriteLine($"[STORAGE] Successfully registered mounted folder item: {id} as {targetItem.GetType().Name}");
+                                _storableRegistry[registrationId] = targetItem;
+                                // Also register the original alias if different
+                                if (id != registrationId)
+                                    _storableRegistry[id] = targetItem;
+                                Console.WriteLine($"[STORAGE] Successfully registered mounted folder item: {registrationId} as {targetItem.GetType().Name}");
                                 return;
                             }
                         }
                         catch (Exception ex)
                         {
-                            Console.WriteLine($"[STORAGE] Failed to navigate to mounted folder item {id}: {ex.Message}");
+                            Console.WriteLine($"[STORAGE] Failed to navigate to mounted folder item {registrationId}: {ex.Message}");
                             // Continue to regular "registration not needed" logic
                         }
                     }
                     
-                    Console.WriteLine($"[STORAGE] Protocol handler says registration not needed for: {id}");
+                    Console.WriteLine($"[STORAGE] Protocol handler says registration not needed for: {registrationId}");
                     return;
                 }
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[STORAGE] Error during protocol registration for {id}: {ex.Message}");
+            Console.WriteLine($"[STORAGE] Error during protocol registration for {registrationId}: {ex.Message}");
             Console.WriteLine($"[STORAGE] Full exception: {ex}");
-            throw new InvalidOperationException($"Failed to register protocol resource '{id}': {ex.Message}", ex);
+            throw new InvalidOperationException($"Failed to register protocol resource '{registrationId}': {ex.Message}", ex);
         }
 
         // Handle regular filesystem paths
-        if (Directory.Exists(id))
+        if (Directory.Exists(registrationId))
         {
-            _storableRegistry[id] = new SystemFolder(new DirectoryInfo(id));
-            Console.WriteLine($"Registered system folder: {id}");
+            var folder = new SystemFolder(new DirectoryInfo(registrationId));
+            _storableRegistry[registrationId] = folder;
+            // Also register the original alias if different
+            if (id != registrationId)
+                _storableRegistry[id] = folder;
+            Console.WriteLine($"Registered system folder: {registrationId}");
         }
-        else if (File.Exists(id))
+        else if (File.Exists(registrationId))
         {
-            _storableRegistry[id] = new SystemFile(new FileInfo(id));
-            Console.WriteLine($"Registered system file: {id}");
+            var file = new SystemFile(new FileInfo(registrationId));
+            _storableRegistry[registrationId] = file;
+            // Also register the original alias if different
+            if (id != registrationId)
+                _storableRegistry[id] = file;
+            Console.WriteLine($"Registered system file: {registrationId}");
         }
         else
         {
-            Console.WriteLine($"Could not register item: {id} (not found in filesystem and no protocol handler)");
+            Console.WriteLine($"Could not register item: {registrationId} (not found in filesystem and no protocol handler)");
         }
     }
 
@@ -255,9 +285,15 @@ public static class StorageTools
             string itemId = ProtocolRegistry.IsCustomProtocol(folderId) ? CreateCustomItemId(folderId, item.Name) : item.Id;
             _storableRegistry[itemId] = item;
             
+            // Use mount alias substitution to present shorter IDs externally
+            string externalId = ProtocolRegistry.SubstituteWithMountAlias(itemId);
+            // Ensure the alias also maps to the same item for external access
+            if (externalId != itemId)
+                _storableRegistry[externalId] = item;
+            
             items.Add(new
             {
-                id = itemId,
+                id = externalId,
                 name = item.Name,
                 type = item switch
                 {
@@ -285,9 +321,15 @@ public static class StorageTools
             string fileId = ProtocolRegistry.IsCustomProtocol(folderId) ? CreateCustomItemId(folderId, file.Name) : file.Id;
             _storableRegistry[fileId] = file;
             
+            // Use mount alias substitution to present shorter IDs externally
+            string externalId = ProtocolRegistry.SubstituteWithMountAlias(fileId);
+            // Ensure the alias also maps to the same item for external access
+            if (externalId != fileId)
+                _storableRegistry[externalId] = file;
+            
             files.Add(new
             {
-                id = fileId,
+                id = externalId,
                 name = file.Name,
                 type = "file"
             });
@@ -310,9 +352,15 @@ public static class StorageTools
             string subfolderId = ProtocolRegistry.IsCustomProtocol(folderId) ? CreateCustomItemId(folderId, subfolder.Name) : subfolder.Id;
             _storableRegistry[subfolderId] = subfolder;
             
+            // Use mount alias substitution to present shorter IDs externally
+            string externalId = ProtocolRegistry.SubstituteWithMountAlias(subfolderId);
+            // Ensure the alias also maps to the same item for external access
+            if (externalId != subfolderId)
+                _storableRegistry[externalId] = subfolder;
+            
             folders.Add(new
             {
-                id = subfolderId,
+                id = externalId,
                 name = subfolder.Name,
                 type = "folder"
             });
@@ -334,9 +382,15 @@ public static class StorageTools
             var foundItem = await folder.GetItemRecursiveAsync(targetItemId);
             _storableRegistry[foundItem.Id] = foundItem;
 
+            // Use mount alias substitution to present shorter IDs externally
+            string externalId = ProtocolRegistry.SubstituteWithMountAlias(foundItem.Id);
+            // Ensure the alias also maps to the same item for external access
+            if (externalId != foundItem.Id)
+                _storableRegistry[externalId] = foundItem;
+
             return new
             {
-                id = foundItem.Id,
+                id = externalId,
                 name = foundItem.Name,
                 type = foundItem switch
                 {
@@ -363,9 +417,15 @@ public static class StorageTools
         var targetItem = await startingItem.GetItemByRelativePathAsync(relativePath);
         _storableRegistry[targetItem.Id] = targetItem;
 
+        // Use mount alias substitution to present shorter IDs externally
+        string externalId = ProtocolRegistry.SubstituteWithMountAlias(targetItem.Id);
+        // Ensure the alias also maps to the same item for external access
+        if (externalId != targetItem.Id)
+            _storableRegistry[externalId] = targetItem;
+
         return new
         {
-            id = targetItem.Id,
+            id = externalId,
             name = targetItem.Name,
             type = targetItem switch
             {
@@ -432,7 +492,7 @@ public static class StorageTools
 
         return new
         {
-            id = storable.Id,
+            id = ProtocolRegistry.SubstituteWithMountAlias(storable.Id),
             name = storable.Name,
             type = storable switch
             {
@@ -457,9 +517,15 @@ public static class StorageTools
 
         _storableRegistry[rootFolder.Id] = rootFolder;
 
+        // Use mount alias substitution to present shorter IDs externally
+        string externalId = ProtocolRegistry.SubstituteWithMountAlias(rootFolder.Id);
+        // Ensure the alias also maps to the same item for external access
+        if (externalId != rootFolder.Id)
+            _storableRegistry[externalId] = rootFolder;
+
         return new
         {
-            id = rootFolder.Id,
+            id = externalId,
             name = rootFolder.Name,
             type = "folder"
         };
@@ -478,9 +544,15 @@ public static class StorageTools
             var foundItem = await folder.GetItemAsync(itemId);
             _storableRegistry[foundItem.Id] = foundItem;
 
+            // Use mount alias substitution to present shorter IDs externally
+            string externalId = ProtocolRegistry.SubstituteWithMountAlias(foundItem.Id);
+            // Ensure the alias also maps to the same item for external access
+            if (externalId != foundItem.Id)
+                _storableRegistry[externalId] = foundItem;
+
             return new
             {
-                id = foundItem.Id,
+                id = externalId,
                 name = foundItem.Name,
                 type = foundItem switch
                 {
@@ -510,9 +582,15 @@ public static class StorageTools
 
         _storableRegistry[parentFolder.Id] = parentFolder;
 
+        // Use mount alias substitution to present shorter IDs externally
+        string externalId = ProtocolRegistry.SubstituteWithMountAlias(parentFolder.Id);
+        // Ensure the alias also maps to the same item for external access
+        if (externalId != parentFolder.Id)
+            _storableRegistry[externalId] = parentFolder;
+
         return new
         {
-            id = parentFolder.Id,
+            id = externalId,
             name = parentFolder.Name,
             type = "folder"
         };

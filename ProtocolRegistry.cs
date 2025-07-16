@@ -445,4 +445,104 @@ public static class ProtocolRegistry
 
         return newRootUri;
     }
+
+    /// <summary>
+    /// Substitutes long IDs with shorter mount aliases where possible, to make them more manageable for smaller models
+    /// </summary>
+    /// <param name="fullId">The full ID to potentially substitute</param>
+    /// <returns>The shortest possible alias ID, or the original ID if no suitable mount exists</returns>
+    public static string SubstituteWithMountAlias(string fullId)
+    {
+        if (string.IsNullOrWhiteSpace(fullId))
+            return fullId;
+
+        // Find the best (longest matching) mount that can substitute part of this ID
+        string bestAlias = fullId;
+        int longestMatchLength = 0;
+
+        foreach (var mount in _mountedFolders.Values)
+        {
+            if (mount.MountedFolder is not IStorableChild mountedChild)
+                continue;
+
+            var mountedId = mountedChild.Id;
+            
+            // Check if the full ID starts with the mounted folder's ID
+            if (fullId.StartsWith(mountedId, StringComparison.OrdinalIgnoreCase))
+            {
+                var matchLength = mountedId.Length;
+                
+                // Only substitute if this mount provides a longer match than what we already found
+                if (matchLength > longestMatchLength)
+                {
+                    var remainingPart = fullId.Substring(matchLength);
+                    // Ensure proper path separator handling
+                    var aliasId = string.IsNullOrEmpty(remainingPart) ? 
+                        $"{mount.ProtocolScheme}://" : 
+                        $"{mount.ProtocolScheme}://{remainingPart.TrimStart('/', '\\')}";
+                    
+                    bestAlias = aliasId;
+                    longestMatchLength = matchLength;
+                }
+            }
+        }
+
+        // If we found a substitution, recursively check if it can be further shortened
+        if (bestAlias != fullId)
+        {
+            var furtherSubstituted = SubstituteWithMountAlias(bestAlias);
+            if (furtherSubstituted != bestAlias)
+                return furtherSubstituted;
+        }
+
+        return bestAlias;
+    }
+
+    /// <summary>
+    /// Resolves a potentially aliased ID back to its full underlying ID
+    /// </summary>
+    /// <param name="aliasId">The potentially aliased ID to resolve</param>
+    /// <param name="maxDepth">Maximum resolution depth to prevent infinite loops</param>
+    /// <returns>The fully resolved underlying ID</returns>
+    public static string ResolveAliasToFullId(string aliasId, int maxDepth = 10)
+    {
+        if (string.IsNullOrWhiteSpace(aliasId))
+            return aliasId;
+
+        var currentId = aliasId;
+        var depth = 0;
+        
+        while (depth < maxDepth)
+        {
+            var scheme = ExtractScheme(currentId);
+            if (scheme == null || !_mountedFolders.TryGetValue(scheme, out var handler))
+                break;
+
+            // Get the underlying folder's ID
+            if (handler.MountedFolder is not IStorableChild child)
+                break;
+
+            // Replace the mount scheme with the underlying ID
+            var remainingPath = currentId.Substring($"{scheme}://".Length);
+            
+            // Normalize path separators and combine properly
+            if (string.IsNullOrEmpty(remainingPath))
+            {
+                currentId = child.Id;
+            }
+            else
+            {
+                // Normalize path separators to match the underlying system
+                var normalizedPath = remainingPath.Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar);
+                currentId = Path.Combine(child.Id, normalizedPath);
+            }
+
+            depth++;
+        }
+
+        if (depth >= maxDepth)
+            throw new InvalidOperationException($"Alias resolution exceeded maximum depth of {maxDepth} for ID: {aliasId}");
+
+        return currentId;
+    }
 }
