@@ -152,29 +152,6 @@ public static partial class StorageWriteTools
         }
     }
 
-    [McpServerTool, Description("Writes binary content to a file by file ID or path.")]
-    public static async Task<string> WriteFileAsBytes(string fileId, byte[] content)
-    {
-        try
-        {
-            await StorageTools.EnsureStorableRegistered(fileId);
-
-            if (!_storableRegistry.TryGetValue(fileId, out var item) || item is not IFile file)
-                throw new McpException($"File with ID '{fileId}' not found", McpErrorCode.InvalidParams);
-
-            await file.WriteBytesAsync(content);
-            return $"Successfully wrote {content.Length} bytes to file '{file.Name}'";
-        }
-        catch (McpException)
-        {
-            throw; // Re-throw MCP exceptions as-is
-        }
-        catch (Exception ex)
-        {
-            throw new McpException($"Failed to write bytes to file '{fileId}': {ex.Message}", ex, McpErrorCode.InternalError);
-        }
-    }
-
     [McpServerTool, Description("Writes text content to a file with specified encoding by file ID or path.")]
     public static async Task<string> WriteFileAsTextWithEncoding(string fileId, string content, string encoding = "UTF-8")
     {
