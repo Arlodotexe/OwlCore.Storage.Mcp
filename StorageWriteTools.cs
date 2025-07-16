@@ -98,7 +98,7 @@ public static partial class StorageWriteTools
         }
     }
 
-    [McpServerTool, Description("Writes text content to a specific line range in a file (1-based indexing). To INSERT content at startLine, omit endLine parameter entirely. To REPLACE lines startLine through endLine, provide both parameters. endLine must be >= startLine and <= total lines. Do NOT use endLine=0, use null or omit it.")]
+    [McpServerTool, Description("Writes text content to a specific line range in a file (1-based indexing). To INSERT or APPEND content at startLine, omit endLine parameter entirely. To REPLACE lines startLine through endLine, provide both parameters. Do NOT use endLine=0, use null or omit it.")]
     public static async Task<string> WriteFileTextRange(string fileId, string content, int startLine, int? endLine = null)
     {
         await StorageTools.EnsureStorableRegistered(fileId);
@@ -108,7 +108,7 @@ public static partial class StorageWriteTools
 
         // Explicitly reject endLine of 0 since it's invalid (1-based indexing)
         if (endLine.HasValue && endLine.Value <= 0)
-            throw new McpException($"Invalid endLine value: {endLine.Value}. endLine must be >= 1 (1-based indexing) or null for insertion. To insert content, omit endLine parameter entirely.", McpErrorCode.InvalidParams);
+            throw new McpException($"Invalid endLine value: {endLine.Value}. endLine must be >= 1 (1-based indexing) or null for insertion. To insert or append content, omit endLine parameter entirely.", McpErrorCode.InvalidParams);
 
         var originalContent = await file.ReadTextAsync(CancellationToken.None);
         var lines = originalContent.Split('\n');
