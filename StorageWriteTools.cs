@@ -1,6 +1,7 @@
 using ModelContextProtocol.Server;
 using System.ComponentModel;
 using OwlCore.Storage;
+using OwlCore.Kubo;
 using System.Collections.Concurrent;
 using System.Text;
 
@@ -12,7 +13,7 @@ public static partial class StorageWriteTools
     [McpServerTool, Description("Creates a new folder in the specified parent folder by ID or path.")]
     public static async Task<object> CreateFolder(string parentFolderId, string folderName)
     {
-        StorageTools.EnsureStorableRegistered(parentFolderId);
+        await StorageTools.EnsureStorableRegistered(parentFolderId);
 
         if (!_storableRegistry.TryGetValue(parentFolderId, out var storable) || storable is not IModifiableFolder modifiableFolder)
             throw new ArgumentException($"Modifiable folder with ID '{parentFolderId}' not found or not modifiable");
@@ -32,7 +33,7 @@ public static partial class StorageWriteTools
     [McpServerTool, Description("Creates a new file in the specified parent folder by ID or path.")]
     public static async Task<object> CreateFile(string parentFolderId, string fileName)
     {
-        StorageTools.EnsureStorableRegistered(parentFolderId);
+        await StorageTools.EnsureStorableRegistered(parentFolderId);
 
         if (!_storableRegistry.TryGetValue(parentFolderId, out var storable) || storable is not IModifiableFolder modifiableFolder)
             throw new ArgumentException($"Modifiable folder with ID '{parentFolderId}' not found or not modifiable");
@@ -52,7 +53,7 @@ public static partial class StorageWriteTools
     [McpServerTool, Description("Writes text content to a file by file ID or path.")]
     public static async Task<string> WriteFileText(string fileId, string content)
     {
-        StorageTools.EnsureStorableRegistered(fileId);
+        await StorageTools.EnsureStorableRegistered(fileId);
 
         if (!_storableRegistry.TryGetValue(fileId, out var item) || item is not IFile file)
             throw new ArgumentException($"File with ID '{fileId}' not found");
@@ -64,7 +65,7 @@ public static partial class StorageWriteTools
     [McpServerTool, Description("Writes binary content to a file by file ID or path.")]
     public static async Task<string> WriteFileAsBytes(string fileId, byte[] content)
     {
-        StorageTools.EnsureStorableRegistered(fileId);
+        await StorageTools.EnsureStorableRegistered(fileId);
 
         if (!_storableRegistry.TryGetValue(fileId, out var item) || item is not IFile file)
             throw new ArgumentException($"File with ID '{fileId}' not found");
@@ -76,7 +77,7 @@ public static partial class StorageWriteTools
     [McpServerTool, Description("Writes text content to a file with specified encoding by file ID or path.")]
     public static async Task<string> WriteFileAsTextWithEncoding(string fileId, string content, string encoding = "UTF-8")
     {
-        StorageTools.EnsureStorableRegistered(fileId);
+        await StorageTools.EnsureStorableRegistered(fileId);
 
         if (!_storableRegistry.TryGetValue(fileId, out var item) || item is not IFile file)
             throw new ArgumentException($"File with ID '{fileId}' not found");
@@ -97,7 +98,7 @@ public static partial class StorageWriteTools
     [McpServerTool, Description("Deletes a file or folder by ID or path from its parent folder.")]
     public static async Task<string> DeleteItem(string parentFolderId, string itemName)
     {
-        StorageTools.EnsureStorableRegistered(parentFolderId);
+        await StorageTools.EnsureStorableRegistered(parentFolderId);
 
         if (!_storableRegistry.TryGetValue(parentFolderId, out var parent) || parent is not IModifiableFolder modifiableParent)
             throw new ArgumentException($"Parent folder with ID '{parentFolderId}' not found or not modifiable");
@@ -118,8 +119,8 @@ public static partial class StorageWriteTools
     [McpServerTool, Description("Moves or renames an item from source folder to target folder.")]
     public static async Task<object> MoveItem(string sourceFolderId, string itemName, string targetParentFolderId, string? newName = null)
     {
-        StorageTools.EnsureStorableRegistered(sourceFolderId);
-        StorageTools.EnsureStorableRegistered(targetParentFolderId);
+        await StorageTools.EnsureStorableRegistered(sourceFolderId);
+        await StorageTools.EnsureStorableRegistered(targetParentFolderId);
 
         if (!_storableRegistry.TryGetValue(sourceFolderId, out var sourceParent) || sourceParent is not IModifiableFolder sourceModifiableFolder)
             throw new ArgumentException($"Source folder with ID '{sourceFolderId}' not found or not modifiable");
@@ -198,44 +199,99 @@ public static partial class StorageWriteTools
     [McpServerTool, Description("Creates a copy of a file in the specified target folder.")]
     public static async Task<object> CopyFile(string sourceFileId, string targetParentFolderId, string? newName = null, bool overwrite = false)
     {
-        StorageTools.EnsureStorableRegistered(sourceFileId);
-        StorageTools.EnsureStorableRegistered(targetParentFolderId);
-
-        if (!_storableRegistry.TryGetValue(sourceFileId, out var sourceItem) || sourceItem is not IFile sourceFile)
-            throw new ArgumentException($"Source file with ID '{sourceFileId}' not found");
-
-        if (!_storableRegistry.TryGetValue(targetParentFolderId, out var targetParent) || targetParent is not IModifiableFolder targetModifiableFolder)
-            throw new ArgumentException($"Target folder with ID '{targetParentFolderId}' not found or not modifiable");
-
-        // Use the OwlCore.Storage extension method for efficient copying
-        var copiedFile = await targetModifiableFolder.CreateCopyOfAsync(sourceFile, overwrite);
-        
-        // If a new name was specified, rename the copied file
-        if (!string.IsNullOrEmpty(newName) && newName != sourceFile.Name)
+        try
         {
-            // Note: Renaming might require additional implementation depending on the storage provider
-            // For now, we'll use the original name from the copy operation
+            await StorageTools.EnsureStorableRegistered(sourceFileId);
+            await StorageTools.EnsureStorableRegistered(targetParentFolderId);
+
+            if (!_storableRegistry.TryGetValue(sourceFileId, out var sourceItem) || sourceItem is not IFile sourceFile)
+            {
+                // Try to get better error info
+                var sourceExists = _storableRegistry.ContainsKey(sourceFileId);
+                var sourceType = sourceExists ? _storableRegistry[sourceFileId].GetType().Name : "not found";
+                throw new ArgumentException($"Source file with ID '{sourceFileId}' not found or not a file. Registry contains: {sourceExists}, Type: {sourceType}");
+            }
+
+            if (!_storableRegistry.TryGetValue(targetParentFolderId, out var targetParent) || targetParent is not IModifiableFolder targetModifiableFolder)
+            {
+                // Try to get better error info
+                var targetExists = _storableRegistry.ContainsKey(targetParentFolderId);
+                var targetType = targetExists ? _storableRegistry[targetParentFolderId].GetType().Name : "not found";
+                throw new ArgumentException($"Target folder with ID '{targetParentFolderId}' not found or not modifiable. Registry contains: {targetExists}, Type: {targetType}");
+            }
+
+            try
+            {
+                // Try the efficient method first
+                Console.WriteLine($"Attempting efficient copy from {sourceFileId} to {targetParentFolderId}");
+                var copiedFile = await targetModifiableFolder.CreateCopyOfAsync(sourceFile, overwrite);
+                
+                string newFileId = ProtocolRegistry.IsCustomProtocol(targetParentFolderId) ? 
+                    StorageTools.CreateCustomItemId(targetParentFolderId, copiedFile.Name) : 
+                    copiedFile.Id;
+                _storableRegistry[newFileId] = copiedFile;
+
+                Console.WriteLine($"Efficient copy successful: {newFileId}");
+                return new
+                {
+                    id = newFileId,
+                    name = copiedFile.Name,
+                    type = "file"
+                };
+            }
+            catch (Exception ex)
+            {
+                // If the efficient method fails, fall back to manual copy
+                Console.WriteLine($"Efficient copy failed ({ex.Message}), falling back to manual copy for {sourceFileId} to {targetParentFolderId}");
+                
+                // Determine the target file name
+                var targetFileName = !string.IsNullOrEmpty(newName) ? newName : sourceFile.Name;
+                
+                // Read the source file content
+                Console.WriteLine($"Reading content from source: {sourceFileId}");
+                var fileContent = await sourceFile.ReadBytesAsync(CancellationToken.None);
+                Console.WriteLine($"Read {fileContent.Length} bytes from source");
+                
+                // Create a new file in the target folder
+                Console.WriteLine($"Creating new file: {targetFileName} in {targetParentFolderId}");
+                var newFile = await targetModifiableFolder.CreateFileAsync(targetFileName, overwrite);
+                
+                // Write the content to the new file
+                Console.WriteLine($"Writing {fileContent.Length} bytes to new file");
+                await newFile.WriteBytesAsync(fileContent, CancellationToken.None);
+                
+                string newFileId = ProtocolRegistry.IsCustomProtocol(targetParentFolderId) ? 
+                    StorageTools.CreateCustomItemId(targetParentFolderId, newFile.Name) : 
+                    newFile.Id;
+                _storableRegistry[newFileId] = newFile;
+
+                Console.WriteLine($"Manual copy successful: {newFileId}");
+                return new
+                {
+                    id = newFileId,
+                    name = newFile.Name,
+                    type = "file"
+                };
+            }
         }
-
-        string newFileId = ProtocolRegistry.IsCustomProtocol(targetParentFolderId) ? 
-            StorageTools.CreateCustomItemId(targetParentFolderId, copiedFile.Name) : 
-            copiedFile.Id;
-        _storableRegistry[newFileId] = copiedFile;
-
-        return new
+        catch (Exception ex)
         {
-            id = newFileId,
-            name = copiedFile.Name,
-            type = "file"
-        };
+            var errorMessage = $"Copy operation failed: {ex.Message}";
+            var fullError = $"Full exception: {ex}";
+            Console.WriteLine(errorMessage);
+            Console.WriteLine(fullError);
+            
+            // Instead of throwing, return error information that might be more visible
+            throw new InvalidOperationException($"Failed to copy file from '{sourceFileId}' to '{targetParentFolderId}': {ex.Message}\n\nInner exception: {ex.InnerException?.Message ?? "None"}\n\nStack trace: {ex.StackTrace}", ex);
+        }
     }
 
     [McpServerTool, Description("Moves a file from source folder to target folder using efficient move operations.")]
     public static async Task<object> MoveFile(string sourceFileId, string sourceFolderId, string targetParentFolderId, string? newName = null, bool overwrite = false)
     {
-        StorageTools.EnsureStorableRegistered(sourceFileId);
-        StorageTools.EnsureStorableRegistered(sourceFolderId);
-        StorageTools.EnsureStorableRegistered(targetParentFolderId);
+        await StorageTools.EnsureStorableRegistered(sourceFileId);
+        await StorageTools.EnsureStorableRegistered(sourceFolderId);
+        await StorageTools.EnsureStorableRegistered(targetParentFolderId);
 
         if (!_storableRegistry.TryGetValue(sourceFileId, out var sourceItem) || sourceItem is not IChildFile sourceFile)
             throw new ArgumentException($"Source file with ID '{sourceFileId}' not found or not a child file");

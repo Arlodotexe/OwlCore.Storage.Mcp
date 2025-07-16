@@ -16,6 +16,7 @@ public static class ProtocolRegistry
         RegisterProtocol("https", new HttpProtocolHandler());
         RegisterProtocol("ipfs", new IpfsProtocolHandler());
         RegisterProtocol("ipns", new IpnsProtocolHandler());
+        RegisterProtocol("memory", new MemoryProtocolHandler());
         // Add more protocols here as needed
         // RegisterProtocol("azure-blob", new AzureBlobProtocolHandler());
         // RegisterProtocol("s3", new S3ProtocolHandler());

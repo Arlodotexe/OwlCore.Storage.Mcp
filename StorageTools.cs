@@ -11,32 +11,107 @@ using Ipfs.Http;
 public static class StorageTools
 {
     internal static readonly ConcurrentDictionary<string, IStorable> _storableRegistry = new();
+    
+    static StorageTools()
+    {
+        // Pre-register common protocol roots at startup to avoid on-demand issues
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                foreach (var protocolScheme in ProtocolRegistry.GetRegisteredProtocols())
+                {
+                    var rootUri = $"{protocolScheme}://";
+                    var protocolHandler = ProtocolRegistry.GetProtocolHandler(rootUri);
+                    if (protocolHandler?.HasBrowsableRoot == true)
+                    {
+                        var root = await protocolHandler.CreateRootAsync(rootUri);
+                        if (root != null)
+                        {
+                            _storableRegistry[rootUri] = root;
+                            Console.WriteLine($"Pre-registered protocol root: {rootUri}");
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error pre-registering protocol roots: {ex.Message}");
+            }
+        });
+    }
 
     internal static async Task EnsureStorableRegistered(string id)
     {
-        if (_storableRegistry.ContainsKey(id)) return;
-
-        // Check if this is a custom protocol
-        var protocolHandler = ProtocolRegistry.GetProtocolHandler(id);
-        if (protocolHandler != null)
+        if (_storableRegistry.ContainsKey(id)) 
         {
-            // Try to create a direct resource first (for protocols like HTTP)
-            var resource = await protocolHandler.CreateResourceAsync(id);
-            if (resource != null)
-            {
-                _storableRegistry[id] = resource;
-                return;
-            }
+            Console.WriteLine($"[STORAGE] Item already registered: {id}");
+            return;
+        }
 
-            // Let the protocol handler decide if registration is needed for filesystem-style protocols
-            if (!protocolHandler.NeedsRegistration(id)) return;
+        Console.WriteLine($"[STORAGE] Registering item: {id}");
+
+        try
+        {
+            // Check if this is a custom protocol
+            var protocolHandler = ProtocolRegistry.GetProtocolHandler(id);
+            if (protocolHandler != null)
+            {
+                Console.WriteLine($"[STORAGE] Found protocol handler for {id}: {protocolHandler.GetType().Name}");
+                
+                // For filesystem protocols, try to create a root if this looks like a root URI
+                if (protocolHandler.HasBrowsableRoot && id.EndsWith("://"))
+                {
+                    Console.WriteLine($"[STORAGE] Creating root for filesystem protocol: {id}");
+                    var root = await protocolHandler.CreateRootAsync(id);
+                    if (root != null)
+                    {
+                        _storableRegistry[id] = root;
+                        Console.WriteLine($"[STORAGE] Successfully registered root: {id} as {root.GetType().Name}");
+                        return;
+                    }
+                }
+
+                // Try to create a direct resource first (for protocols like HTTP or specific resource URIs)
+                Console.WriteLine($"[STORAGE] Creating resource for: {id}");
+                var resource = await protocolHandler.CreateResourceAsync(id);
+                if (resource != null)
+                {
+                    _storableRegistry[id] = resource;
+                    Console.WriteLine($"[STORAGE] Successfully registered resource: {id} as {resource.GetType().Name}");
+                    return;
+                }
+
+                // Let the protocol handler decide if registration is needed for filesystem-style protocols
+                if (!protocolHandler.NeedsRegistration(id)) 
+                {
+                    Console.WriteLine($"[STORAGE] Protocol handler says registration not needed for: {id}");
+                    return;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[STORAGE] Error during protocol registration for {id}: {ex.Message}");
+            Console.WriteLine($"[STORAGE] Full exception: {ex}");
+            throw new InvalidOperationException($"Failed to register protocol resource '{id}': {ex.Message}", ex);
         }
 
         // Handle regular filesystem paths
         if (Directory.Exists(id))
+        {
             _storableRegistry[id] = new SystemFolder(new DirectoryInfo(id));
+            Console.WriteLine($"Registered system folder: {id}");
+        }
         else if (File.Exists(id))
+        {
             _storableRegistry[id] = new SystemFile(new FileInfo(id));
+            Console.WriteLine($"Registered system file: {id}");
+        }
+        else
+        {
+            Console.WriteLine($"Could not register item: {id} (not found in filesystem and no protocol handler)");
+        }
     }
 
     internal static string CreateCustomItemId(string parentId, string itemName)

@@ -19,8 +19,12 @@ public class IpnsProtocolHandler : IProtocolHandler
 
     public async Task<IStorable?> CreateResourceAsync(string resourceUri)
     {
+        Console.WriteLine($"[IPNS] CreateResourceAsync called with URI: {resourceUri}");
+        
         // Extract the IPNS name and path from the URI (e.g., "ipns://example.com/path" -> "example.com" and "/path")
         var (ipnsName, ipnsPath) = ExtractIpnsNameAndPath(resourceUri);
+        Console.WriteLine($"[IPNS] Extracted name: '{ipnsName}', path: '{ipnsPath}'");
+        
         if (string.IsNullOrEmpty(ipnsName))
             throw new ArgumentException($"Could not extract IPNS name from URI: {resourceUri}");
 
@@ -28,11 +32,14 @@ public class IpnsProtocolHandler : IProtocolHandler
         
         try
         {
+            Console.WriteLine("[IPNS] Testing IPFS client accessibility...");
             // Test if IPFS client is accessible first
             await client.Generic.IdAsync();
+            Console.WriteLine("[IPNS] IPFS client is accessible");
         }
         catch (Exception ex)
         {
+            Console.WriteLine($"[IPNS] IPFS client not accessible: {ex.Message}");
             throw new InvalidOperationException($"IPFS client not accessible: {ex.Message}", ex);
         }
 
@@ -41,14 +48,30 @@ public class IpnsProtocolHandler : IProtocolHandler
             // Format the IPNS address as required by OwlCore.Kubo (must start with /ipns/)
             // Include the full path: /ipns/domain.com/path
             var ipnsAddress = $"/ipns/{ipnsName}{ipnsPath}";
-            Console.WriteLine($"Creating IPNS folder with address: {ipnsAddress}");
+            Console.WriteLine($"[IPNS] Creating IPNS resource with address: {ipnsAddress}");
             
-            // IpnsFolder can represent either a folder or a file - it will determine the type based on the IPNS name
-            var ipnsFolder = new IpnsFolder(ipnsAddress, client);
-            return ipnsFolder;
+            // Determine if this should be a file or folder based on the path
+            // If the path has a file extension or points to a specific file, create IpnsFile
+            // Otherwise, create IpnsFolder
+            if (!string.IsNullOrEmpty(ipnsPath) && HasFileExtension(ipnsPath))
+            {
+                Console.WriteLine($"[IPNS] Path appears to be a file, creating IpnsFile");
+                var ipnsFile = new IpnsFile(ipnsAddress, client);
+                Console.WriteLine($"[IPNS] Successfully created IpnsFile of type: {ipnsFile.GetType().Name}");
+                return ipnsFile;
+            }
+            else
+            {
+                Console.WriteLine($"[IPNS] Path appears to be a folder, creating IpnsFolder");
+                var ipnsFolder = new IpnsFolder(ipnsAddress, client);
+                Console.WriteLine($"[IPNS] Successfully created IpnsFolder of type: {ipnsFolder.GetType().Name}");
+                return ipnsFolder;
+            }
         }
         catch (Exception ex)
         {
+            Console.WriteLine($"[IPNS] Failed to create IPNS resource: {ex.Message}");
+            Console.WriteLine($"[IPNS] Full exception: {ex}");
             throw new InvalidOperationException($"Failed to create IPNS resource for '{ipnsName}{ipnsPath}': {ex.Message}", ex);
         }
     }
@@ -104,5 +127,13 @@ public class IpnsProtocolHandler : IProtocolHandler
         var path = pathPart.Substring(slashIndex); // Include the leading slash
         
         return (name, path);
+    }
+
+    private bool HasFileExtension(string path)
+    {
+        // Check if the path has a file extension
+        // Common file extensions that indicate this is a file, not a folder
+        var fileName = Path.GetFileName(path);
+        return !string.IsNullOrEmpty(fileName) && fileName.Contains('.') && !fileName.EndsWith('/');
     }
 }
