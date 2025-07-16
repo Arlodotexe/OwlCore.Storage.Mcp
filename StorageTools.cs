@@ -202,7 +202,7 @@ public static class StorageTools
         return ProtocolRegistry.CreateCustomItemId(parentId, itemName);
     }
 
-    [McpServerTool, Description("Gets the paths of the available drives including IPFS MFS, Memory storage, and other custom protocol roots")]
+    [McpServerTool, Description("Gets the paths of the available drives including IPFS MFS, Memory storage, mounted folders, and other custom protocol roots. Use these drive IDs as starting points for GetItemByRelativePath navigation.")]
     public static async Task<object[]> GetAvailableDrives()
     {
         var driveInfos = new List<object>();
@@ -236,7 +236,15 @@ public static class StorageTools
             }
         }
 
-        // Add custom protocol roots (only for protocols that have browsable roots)
+        // Add mounted folders
+        await ProtocolRegistry.EnsureInitializedAsync();
+        var mountedFolders = ProtocolRegistry.GetMountedFolders();
+        foreach (var mount in mountedFolders)
+        {
+            driveInfos.Add(mount);
+        }
+
+        // Add custom protocol roots (only for protocols that have browsable roots and aren't mounted folders)
         foreach (var protocolScheme in ProtocolRegistry.GetRegisteredProtocols())
         {
             var rootUri = $"{protocolScheme}://";
@@ -244,6 +252,9 @@ public static class StorageTools
             {
                 var protocolHandler = ProtocolRegistry.GetProtocolHandler(rootUri);
                 if (protocolHandler == null || !protocolHandler.HasBrowsableRoot) continue;
+                
+                // Skip mounted folder protocols since they're already included above
+                if (protocolHandler is MountedFolderProtocolHandler) continue;
 
                 // Only register root if not already registered
                 if (!_storableRegistry.ContainsKey(rootUri))
@@ -272,7 +283,7 @@ public static class StorageTools
         return driveInfos.ToArray();
     }
 
-    [McpServerTool, Description("Lists all items in a folder by ID or path. Works with local folders, IPFS MFS, and IPFS/IPNS folder hashes. Returns array of items with their IDs, names, and types.")]
+    [McpServerTool, Description("Lists all items in a folder by ID or path. Works with local folders, IPFS MFS, and IPFS/IPNS folder hashes. Returns array of items with their IDs, names, and types. TIP: For known paths, consider using GetItemByRelativePath instead for direct navigation.")]
     public static async Task<object[]> GetFolderItems(string folderId)
     {
         try
@@ -451,7 +462,7 @@ public static class StorageTools
         }
     }
 
-    [McpServerTool, Description("Navigates to an item using a relative path from a starting item.")]
+    [McpServerTool, Description("Navigates to an item using a relative path from a starting item. This is the recommended way to access files - use drive IDs from GetAvailableDrives() as starting points, then navigate with relative paths like 'Documents/Projects/myfile.txt'. This is more efficient than browsing folder by folder.")]
     public static async Task<object> GetItemByRelativePath(string startingItemId, string relativePath)
     {
         try
