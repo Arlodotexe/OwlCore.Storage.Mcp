@@ -8,8 +8,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="CommunityToolkit.Diagnostics" Version="8.4.0" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="9.0.7" />
     <PackageReference Include="ModelContextProtocol" Version="0.3.0-preview.2" />
+    <PackageReference Include="OwlCore.ComponentModel.Settings" Version="0.1.1" />
     <PackageReference Include="OwlCore.Kubo" Version="0.21.1" />
     <PackageReference Include="OwlCore.Storage" Version="0.12.3" />
   </ItemGroup>

@@ -5,6 +5,8 @@ using OwlCore.Kubo;
 using System.Collections.Concurrent;
 using System.Text;
 
+namespace OwlCore.Storage.Mcp;
+
 [McpServerToolType]
 public static partial class StorageWriteTools
 {

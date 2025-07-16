@@ -1,5 +1,7 @@
 using OwlCore.Storage;
 
+namespace OwlCore.Storage.Mcp;
+
 /// <summary>
 /// Example S3 protocol handler (not fully implemented - for demonstration)
 /// This shows how you could extend the system to support Amazon S3 storage

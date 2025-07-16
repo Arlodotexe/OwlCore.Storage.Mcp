@@ -2,6 +2,8 @@ using OwlCore.Storage;
 using OwlCore.Kubo;
 using Ipfs.Http;
 
+namespace OwlCore.Storage.Mcp;
+
 /// <summary>
 /// Protocol handler for IPFS MFS (Mutable File System)
 /// </summary>

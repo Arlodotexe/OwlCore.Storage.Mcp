@@ -2,6 +2,8 @@ using OwlCore.Storage;
 using OwlCore.Kubo;
 using Ipfs.Http;
 
+namespace OwlCore.Storage.Mcp;
+
 /// <summary>
 /// Protocol handler for IPNS (InterPlanetary Name System) content
 /// This handler supports IPNS names that resolve to IPFS content - content can be files or browsable folders

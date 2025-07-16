@@ -1,4 +1,7 @@
 using OwlCore.Storage;
+
+namespace OwlCore.Storage.Mcp;
+
 /// <summary>
 /// Interface for protocol handlers that manage custom storage protocols
 /// </summary>

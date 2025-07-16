@@ -1,6 +1,8 @@
 using OwlCore.Storage;
 using System.Collections.Concurrent;
 
+namespace OwlCore.Storage.Mcp;
+
 /// <summary>
 /// Protocol handler for mounting arbitrary IFolder instances with custom protocol schemes
 /// </summary>

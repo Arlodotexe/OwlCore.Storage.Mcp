@@ -1,6 +1,8 @@
 using OwlCore.Storage;
 using OwlCore.Storage.System.Net.Http;
 
+namespace OwlCore.Storage.Mcp;
+
 /// <summary>
 /// Protocol handler for HTTP file resources
 /// This handler supports individual HTTP file URLs but doesn't provide a browsable root

@@ -7,6 +7,8 @@ using System.Collections.Concurrent;
 using System.Text;
 using Ipfs.Http;
 
+namespace OwlCore.Storage.Mcp;
+
 [McpServerToolType]
 public static class StorageTools
 {
@@ -598,5 +600,44 @@ public static class StorageTools
     public static object[] GetMountedFolders()
     {
         return ProtocolRegistry.GetMountedFolders();
+    }
+
+    [McpServerTool, Description("Renames a mounted folder's protocol scheme and/or display name. Preserves all existing references and dependencies.")]
+    public static object RenameMountedFolder(
+        [Description("The current protocol scheme to rename")] string currentProtocolScheme,
+        [Description("The new protocol scheme (optional, leave empty to keep current)")] string? newProtocolScheme = null,
+        [Description("The new display name (optional, leave empty to keep current)")] string? newMountName = null)
+    {
+        if (string.IsNullOrWhiteSpace(currentProtocolScheme))
+            throw new ArgumentException("Current protocol scheme cannot be null or empty", nameof(currentProtocolScheme));
+
+        try
+        {
+            var newRootUri = ProtocolRegistry.RenameMountedFolder(currentProtocolScheme, newProtocolScheme, newMountName);
+            
+            // Update storable registry if protocol scheme changed
+            if (!string.IsNullOrEmpty(newProtocolScheme) && newProtocolScheme != currentProtocolScheme)
+            {
+                var oldRootUri = $"{currentProtocolScheme}://";
+                if (_storableRegistry.TryRemove(oldRootUri, out var folder))
+                {
+                    _storableRegistry[newRootUri] = folder;
+                }
+            }
+            
+            return new
+            {
+                success = true,
+                oldProtocolScheme = currentProtocolScheme,
+                newProtocolScheme = newProtocolScheme ?? currentProtocolScheme,
+                newMountName = newMountName,
+                newRootUri = newRootUri,
+                message = $"Successfully renamed mount to {newRootUri}"
+            };
+        }
+        catch (ArgumentException ex)
+        {
+            throw new ArgumentException($"Failed to rename mounted folder: {ex.Message}", ex);
+        }
     }
 }

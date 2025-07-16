@@ -2,6 +2,8 @@ using OwlCore.Storage;
 using OwlCore.Kubo;
 using Ipfs.Http;
 
+namespace OwlCore.Storage.Mcp;
+
 /// <summary>
 /// Protocol handler for IPFS content addressed by hash
 /// This handler supports individual IPFS content by hash - content can be files or browsable folders

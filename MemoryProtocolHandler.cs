@@ -1,6 +1,8 @@
 using OwlCore.Storage;
 using OwlCore.Storage.Memory;
 
+namespace OwlCore.Storage.Mcp;
+
 /// <summary>
 /// Protocol handler for in-memory storage using OwlCore.Storage.Memory
 /// Useful for testing and temporary storage that doesn't persist
