@@ -148,7 +148,7 @@ public class AzureBlobProtocolHandler : IProtocolHandler
 static ProtocolRegistry()
 {
     // Register built-in protocol handlers
-    RegisterProtocol("ipfs-mfs", new IpfsMfsProtocolHandler());
+    RegisterProtocol("mfs", new IpfsMfsProtocolHandler());
     
     // Add cloud storage protocols (when fully implemented)
     // RegisterProtocol("s3", new S3ProtocolHandler());

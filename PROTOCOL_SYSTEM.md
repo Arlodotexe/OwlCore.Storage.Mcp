@@ -64,7 +64,7 @@ Add the protocol to the registry in `ProtocolRegistry.cs`:
 static ProtocolRegistry()
 {
     // Register built-in protocol handlers
-    RegisterProtocol("ipfs-mfs", new IpfsMfsProtocolHandler());
+    RegisterProtocol("mfs", new IpfsMfsProtocolHandler());
     
     // Add your custom protocol
     RegisterProtocol("mycustom", new MyCustomProtocolHandler());
@@ -134,9 +134,9 @@ public class AzureBlobProtocolHandler : IProtocolHandler
 
 ## Migration from Hardcoded IPFS
 
-The system automatically handles the migration from the old hardcoded `ipfs-mfs://` checks to the new generalized approach:
+The system automatically handles the migration from the old hardcoded `mfs://` checks to the new generalized approach:
 
-- `StartsWith("ipfs-mfs://")` → `ProtocolRegistry.IsCustomProtocol(id)`
+- `StartsWith("mfs://")` → `ProtocolRegistry.IsCustomProtocol(id)`
 - `CreateMfsItemId()` → `CreateCustomItemId()`
 - Protocol-specific drive info → `protocolHandler.GetDriveInfoAsync()`
 

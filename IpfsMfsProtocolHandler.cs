@@ -1,6 +1,7 @@
 using OwlCore.Storage;
 using OwlCore.Kubo;
 using Ipfs.Http;
+
 /// <summary>
 /// Protocol handler for IPFS MFS (Mutable File System)
 /// </summary>
@@ -14,7 +15,7 @@ public class IpfsMfsProtocolHandler : IProtocolHandler
 
     public string CreateItemId(string parentId, string itemName)
     {
-        return parentId == "ipfs-mfs://" ? $"ipfs-mfs://{itemName}" : $"{parentId}/{itemName}";
+        return parentId == "mfs://" ? $"mfs://{itemName}" : $"{parentId}/{itemName}";
     }
 
     public async Task<object> GetDriveInfoAsync(string rootUri)

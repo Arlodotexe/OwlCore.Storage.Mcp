@@ -12,7 +12,7 @@ public static class ProtocolRegistry
     static ProtocolRegistry()
     {
         // Register built-in protocol handlers
-        RegisterProtocol("ipfs-mfs", new IpfsMfsProtocolHandler());
+        RegisterProtocol("mfs", new IpfsMfsProtocolHandler());
         // Add more protocols here as needed
         // RegisterProtocol("azure-blob", new AzureBlobProtocolHandler());
         // RegisterProtocol("s3", new S3ProtocolHandler());
@@ -21,7 +21,7 @@ public static class ProtocolRegistry
     /// <summary>
     /// Registers a protocol handler for a specific scheme
     /// </summary>
-    /// <param name="scheme">The protocol scheme (e.g., "ipfs-mfs", "s3", etc.)</param>
+    /// <param name="scheme">The protocol scheme (e.g., "mfs", "s3", etc.)</param>
     /// <param name="handler">The handler implementation</param>
     public static void RegisterProtocol(string scheme, IProtocolHandler handler)
     {
