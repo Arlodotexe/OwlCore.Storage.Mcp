@@ -16,7 +16,13 @@ public static class StorageTools
     {
         if (_storableRegistry.ContainsKey(id)) return;
 
-        if (id.StartsWith("ipfs-mfs://")) return; // MFS items are registered when first accessed
+        // Check if this is a custom protocol
+        var protocolHandler = ProtocolRegistry.GetProtocolHandler(id);
+        if (protocolHandler != null)
+        {
+            // Let the protocol handler decide if registration is needed
+            if (!protocolHandler.NeedsRegistration(id)) return;
+        }
 
         // Handle regular filesystem paths
         if (Directory.Exists(id))
@@ -25,9 +31,9 @@ public static class StorageTools
             _storableRegistry[id] = new SystemFile(new FileInfo(id));
     }
 
-    internal static string CreateMfsItemId(string parentId, string itemName)
+    internal static string CreateCustomItemId(string parentId, string itemName)
     {
-        return parentId == "ipfs-mfs://" ? $"ipfs-mfs://{itemName}" : $"{parentId}/{itemName}";
+        return ProtocolRegistry.CreateCustomItemId(parentId, itemName);
     }
 
     [McpServerTool, Description("Gets the paths of the available drives including IPFS MFS")]
@@ -64,37 +70,31 @@ public static class StorageTools
             }
         }
 
-        // Add IPFS MFS root
-        const string mfsId = "ipfs-mfs://";
-        try
+        // Add custom protocol roots
+        foreach (var protocolScheme in ProtocolRegistry.GetRegisteredProtocols())
         {
-            var client = new IpfsClient();
-            
-            // Only register MFS root if not already registered
-            if (!_storableRegistry.ContainsKey(mfsId))
+            var rootUri = $"{protocolScheme}://";
+            try
             {
-                var mfsRoot = new MfsFolder("/", client);
-                _storableRegistry[mfsId] = mfsRoot;
+                var protocolHandler = ProtocolRegistry.GetProtocolHandler(rootUri);
+                if (protocolHandler == null) continue;
+
+                // Only register root if not already registered
+                if (!_storableRegistry.ContainsKey(rootUri))
+                {
+                    var protocolRoot = await protocolHandler.CreateRootAsync(rootUri);
+                    _storableRegistry[rootUri] = protocolRoot;
+                }
+                
+                // Get drive information from the protocol handler
+                var driveInfo = await protocolHandler.GetDriveInfoAsync(rootUri);
+                driveInfos.Add(driveInfo);
             }
-            
-            // Get repository statistics from IPFS
-            var repoStats = await client.Stats.RepositoryAsync();
-            
-            driveInfos.Add(new
+            catch (Exception ex)
             {
-                id = mfsId,
-                name = "IPFS MFS Root",
-                type = "mfs",
-                driveType = "NetworkDrive",
-                isReady = true,
-                totalSize = (long)repoStats.StorageMax,
-                availableFreeSpace = (long)(repoStats.StorageMax - repoStats.RepoSize)
-            });
-        }
-        catch (Exception ex)
-        {
-            // If IPFS is not available, log but don't fail
-            Console.Error.WriteLine($"IPFS MFS not available: {ex.Message}");
+                // If protocol is not available, log but don't fail
+                Console.Error.WriteLine($"{protocolScheme} protocol not available: {ex.Message}");
+            }
         }
 
         return driveInfos.ToArray();
@@ -111,7 +111,7 @@ public static class StorageTools
         var items = new List<object>();
         await foreach (var item in folder.GetItemsAsync())
         {
-            string itemId = folderId == "ipfs-mfs://" ? CreateMfsItemId(folderId, item.Name) : item.Id;
+            string itemId = ProtocolRegistry.IsCustomProtocol(folderId) ? CreateCustomItemId(folderId, item.Name) : item.Id;
             _storableRegistry[itemId] = item;
             
             items.Add(new
@@ -141,7 +141,7 @@ public static class StorageTools
         var files = new List<object>();
         await foreach (var file in folder.GetFilesAsync())
         {
-            string fileId = folderId == "ipfs-mfs://" ? CreateMfsItemId(folderId, file.Name) : file.Id;
+            string fileId = ProtocolRegistry.IsCustomProtocol(folderId) ? CreateCustomItemId(folderId, file.Name) : file.Id;
             _storableRegistry[fileId] = file;
             
             files.Add(new
@@ -166,7 +166,7 @@ public static class StorageTools
         var folders = new List<object>();
         await foreach (var subfolder in folder.GetFoldersAsync())
         {
-            string subfolderId = folderId == "ipfs-mfs://" ? CreateMfsItemId(folderId, subfolder.Name) : subfolder.Id;
+            string subfolderId = ProtocolRegistry.IsCustomProtocol(folderId) ? CreateCustomItemId(folderId, subfolder.Name) : subfolder.Id;
             _storableRegistry[subfolderId] = subfolder;
             
             folders.Add(new

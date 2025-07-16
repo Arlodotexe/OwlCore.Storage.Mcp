@@ -18,7 +18,7 @@ public static partial class StorageWriteTools
             throw new ArgumentException($"Modifiable folder with ID '{parentFolderId}' not found or not modifiable");
 
         var newFolder = await modifiableFolder.CreateFolderAsync(folderName);
-        string newFolderId = parentFolderId.StartsWith("ipfs-mfs://") ? StorageTools.CreateMfsItemId(parentFolderId, folderName) : newFolder.Id;
+        string newFolderId = ProtocolRegistry.IsCustomProtocol(parentFolderId) ? StorageTools.CreateCustomItemId(parentFolderId, folderName) : newFolder.Id;
         _storableRegistry[newFolderId] = newFolder;
 
         return new
@@ -38,7 +38,7 @@ public static partial class StorageWriteTools
             throw new ArgumentException($"Modifiable folder with ID '{parentFolderId}' not found or not modifiable");
 
         var newFile = await modifiableFolder.CreateFileAsync(fileName);
-        string newFileId = parentFolderId.StartsWith("ipfs-mfs://") ? StorageTools.CreateMfsItemId(parentFolderId, fileName) : newFile.Id;
+        string newFileId = ProtocolRegistry.IsCustomProtocol(parentFolderId) ? StorageTools.CreateCustomItemId(parentFolderId, fileName) : newFile.Id;
         _storableRegistry[newFileId] = newFile;
 
         return new
@@ -109,7 +109,7 @@ public static partial class StorageWriteTools
         await modifiableParent.DeleteAsync(storableChild);
         
         // Remove from registry if it was registered
-        string itemId = parentFolderId.StartsWith("ipfs-mfs://") ? StorageTools.CreateMfsItemId(parentFolderId, itemName) : itemToDelete.Id;
+        string itemId = ProtocolRegistry.IsCustomProtocol(parentFolderId) ? StorageTools.CreateCustomItemId(parentFolderId, itemName) : itemToDelete.Id;
         _storableRegistry.TryRemove(itemId, out _);
         
         return $"Successfully deleted item '{itemName}' from folder '{parent.Name}'";
@@ -176,10 +176,10 @@ public static partial class StorageWriteTools
         // For other types, we manually deleted above
         
         // Remove old registration and add new one
-        string oldItemId = sourceFolderId.StartsWith("ipfs-mfs://") ? StorageTools.CreateMfsItemId(sourceFolderId, itemName) : item.Id;
+        string oldItemId = ProtocolRegistry.IsCustomProtocol(sourceFolderId) ? StorageTools.CreateCustomItemId(sourceFolderId, itemName) : item.Id;
         _storableRegistry.TryRemove(oldItemId, out _);
 
-        string newItemId = targetParentFolderId.StartsWith("ipfs-mfs://") ? StorageTools.CreateMfsItemId(targetParentFolderId, finalName) : newItem.Id;
+        string newItemId = ProtocolRegistry.IsCustomProtocol(targetParentFolderId) ? StorageTools.CreateCustomItemId(targetParentFolderId, finalName) : newItem.Id;
         _storableRegistry[newItemId] = newItem;
 
         return new
@@ -217,8 +217,8 @@ public static partial class StorageWriteTools
             // For now, we'll use the original name from the copy operation
         }
 
-        string newFileId = targetParentFolderId.StartsWith("ipfs-mfs://") ? 
-            StorageTools.CreateMfsItemId(targetParentFolderId, copiedFile.Name) : 
+        string newFileId = ProtocolRegistry.IsCustomProtocol(targetParentFolderId) ? 
+            StorageTools.CreateCustomItemId(targetParentFolderId, copiedFile.Name) : 
             copiedFile.Id;
         _storableRegistry[newFileId] = copiedFile;
 
@@ -255,8 +255,8 @@ public static partial class StorageWriteTools
         // Remove old registration and add new one
         _storableRegistry.TryRemove(sourceFileId, out _);
 
-        string newFileId = targetParentFolderId.StartsWith("ipfs-mfs://") ? 
-            StorageTools.CreateMfsItemId(targetParentFolderId, movedFile.Name) : 
+        string newFileId = ProtocolRegistry.IsCustomProtocol(targetParentFolderId) ? 
+            StorageTools.CreateCustomItemId(targetParentFolderId, movedFile.Name) : 
             movedFile.Id;
         _storableRegistry[newFileId] = movedFile;
 
