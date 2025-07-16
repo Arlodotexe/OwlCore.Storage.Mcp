@@ -37,40 +37,6 @@ public static class StorageTools
             // Initialize ProtocolRegistry and restore mounts
             await ProtocolRegistry.EnsureInitializedAsync();
             
-            // CRITICAL: Trigger mount restoration by calling GetMountedFolders()
-            // This ensures mounted folder protocols like "desktop://" are actually registered
-            var mountedFolders = ProtocolRegistry.GetMountedFolders();
-            Console.WriteLine($"Restored {mountedFolders.Length} mounted folders during initialization");
-            
-            // Register mounted folder root URIs in our storable registry
-            foreach (var mount in mountedFolders)
-            {
-                if (mount is IDictionary<string, object> mountDict && 
-                    mountDict.TryGetValue("id", out var idObj) && 
-                    idObj is string mountId &&
-                    mountId.EndsWith("://"))
-                {
-                    // This is a mounted folder root URI - we need to register it
-                    var protocolHandler = ProtocolRegistry.GetProtocolHandler(mountId);
-                    if (protocolHandler?.HasBrowsableRoot == true)
-                    {
-                        try
-                        {
-                            var root = await protocolHandler.CreateRootAsync(mountId, CancellationToken.None);
-                            if (root != null)
-                            {
-                                _storableRegistry[mountId] = root;
-                                Console.WriteLine($"Pre-registered mounted folder root: {mountId}");
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"Failed to pre-register mounted folder root {mountId}: {ex.Message}");
-                        }
-                    }
-                }
-            }
-            
             // Pre-register common protocol roots after mount restoration
             foreach (var protocolScheme in ProtocolRegistry.GetRegisteredProtocols())
             {
