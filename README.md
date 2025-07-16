@@ -30,23 +30,33 @@ This project bridges the gap between different storage systems by providing a co
 
 ### Client Configuration
 
-Add this configuration to your MCP client settings:
+This MCP server is designed to be used locally only, over stdio.
 
+For **LM Studio** ([setup guide](https://lmstudio.ai/docs/app/plugins/mcp#install-new-servers-mcpjson)), add to `mcpServers`:
 ```json
 {
   "mcpServers": {
-    "owlcore-storage": {
-      "command": "dotnet",
-      "args": ["run", "--project", "/path/to/OwlCore.Storage.Mcp.csproj"],
-      "env": {}
-    }
+    // Add the "owlcore-storage" server config object here
   }
 }
 ```
 
-For setup instructions:
-- **LM Studio**: [MCP server installation guide](https://lmstudio.ai/docs/app/plugins/mcp#install-new-servers-mcpjson)
-- **GitHub Copilot in VS Code**: [MCP servers documentation](https://code.visualstudio.com/docs/copilot/chat/mcp-servers)
+For **GitHub Copilot in VS Code** ([setup guide](https://code.visualstudio.com/docs/copilot/chat/mcp-servers)), add to `servers`:
+```json
+{
+  "servers": {
+    // Add the "owlcore-storage" server config object here
+  }
+}
+```
+
+In both cases, you'll need this server config object:
+```json
+"owlcore-storage": {
+  "command": "dotnet",
+  "args": ["run", "--project", "/path/to/OwlCore.Storage.Mcp/"],
+}
+```
 
 ### Available Storage Operations
 
