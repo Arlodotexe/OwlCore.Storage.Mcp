@@ -13,13 +13,13 @@ public class HttpProtocolHandler : IProtocolHandler
 
     public bool HasBrowsableRoot => false; // HTTP doesn't have a browsable root
 
-    public Task<IStorable?> CreateRootAsync(string rootUri)
+    public Task<IStorable?> CreateRootAsync(string rootUri, CancellationToken cancellationToken = default)
     {
         // HTTP protocol doesn't have a browsable root
         return Task.FromResult<IStorable?>(null);
     }
 
-    public Task<IStorable?> CreateResourceAsync(string resourceUri)
+    public Task<IStorable?> CreateResourceAsync(string resourceUri, CancellationToken cancellationToken = default)
     {
         try
         {
@@ -41,7 +41,7 @@ public class HttpProtocolHandler : IProtocolHandler
         return $"{parentId.TrimEnd('/')}/{itemName}";
     }
 
-    public Task<object?> GetDriveInfoAsync(string rootUri)
+    public Task<object?> GetDriveInfoAsync(string rootUri, CancellationToken cancellationToken = default)
     {
         // HTTP protocol doesn't have drive info since it doesn't have a browsable root
         return Task.FromResult<object?>(null);

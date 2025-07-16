@@ -21,13 +21,13 @@ public class MountedFolderProtocolHandler : IProtocolHandler
 
     public bool HasBrowsableRoot => true;
 
-    public Task<IStorable?> CreateRootAsync(string rootUri)
+    public Task<IStorable?> CreateRootAsync(string rootUri, CancellationToken cancellationToken = default)
     {
         // Return the mounted folder as the root
         return Task.FromResult<IStorable?>(_mountedFolder);
     }
 
-    public Task<IStorable?> CreateResourceAsync(string resourceUri)
+    public Task<IStorable?> CreateResourceAsync(string resourceUri, CancellationToken cancellationToken = default)
     {
         // Mounted folders use filesystem navigation, not direct resource access
         return Task.FromResult<IStorable?>(null);
@@ -44,10 +44,10 @@ public class MountedFolderProtocolHandler : IProtocolHandler
         return $"{parentId}/{itemName}";
     }
 
-    public async Task<object?> GetDriveInfoAsync(string rootUri)
+    public Task<object?> GetDriveInfoAsync(string rootUri, CancellationToken cancellationToken = default)
     {
         // Return drive information for the mounted folder
-        return new
+        return Task.FromResult<object?>(new
         {
             id = rootUri,
             name = $"Mounted: {_mountName}",
@@ -56,7 +56,7 @@ public class MountedFolderProtocolHandler : IProtocolHandler
             isReady = true,
             totalSize = -1L, // Unknown for arbitrary folders
             availableFreeSpace = -1L // Unknown for arbitrary folders
-        };
+        });
     }
 
     public bool NeedsRegistration(string id)

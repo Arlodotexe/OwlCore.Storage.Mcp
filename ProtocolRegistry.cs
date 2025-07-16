@@ -117,14 +117,95 @@ public static class ProtocolRegistry
     }
 
     /// <summary>
-    /// Tries to register a storable item if it's not already registered
+    /// Tries to register a storable item if it's not already registered.
+    /// 
+    /// CRITICAL: This method is called during mount restoration and must NOT create circular dependencies
+    /// by calling back into StorageTools.EnsureStorableRegistered(). It handles storage registration
+    /// directly to avoid infinite recursion during initialization.
+    /// 
+    /// The method supports:
+    /// - Direct filesystem paths (Directory.Exists/File.Exists)
+    /// - Protocol root creation for browsable protocols
+    /// - Navigation within mounted folder protocols for recursive mount dependencies
     /// </summary>
+    /// <param name="folderId">The storage ID to register</param>
+    /// <returns>True if registration succeeded, false if the item cannot be registered yet</returns>
     private static async Task<bool> TryRegisterStorableAsync(string folderId)
     {
         try
         {
-            await StorageTools.EnsureStorableRegistered(folderId);
-            return StorageTools._storableRegistry.ContainsKey(folderId);
+            // First check if it's already registered
+            if (StorageTools._storableRegistry.ContainsKey(folderId))
+                return true;
+
+            // Avoid circular dependency during initialization - only try filesystem paths directly
+            if (Directory.Exists(folderId))
+            {
+                var folder = new SystemFolder(new DirectoryInfo(folderId));
+                StorageTools._storableRegistry[folderId] = folder;
+                return true;
+            }
+            else if (File.Exists(folderId))
+            {
+                var file = new SystemFile(new FileInfo(folderId));
+                StorageTools._storableRegistry[folderId] = file;
+                return true;
+            }
+            
+            // For protocol-based IDs during initialization, try to resolve them carefully
+            if (folderId.Contains("://"))
+            {
+                var scheme = ExtractScheme(folderId);
+                if (scheme != null && _protocolHandlers.ContainsKey(scheme))
+                {
+                    var handler = _protocolHandlers[scheme];
+                    
+                    // If this is a root URI and the protocol exists, it might be restorable
+                    if (folderId.EndsWith("://"))
+                    {
+                        if (handler?.HasBrowsableRoot == true)
+                        {
+                            // For protocol roots, try to create them directly during initialization
+                            try
+                            {
+                                var root = await handler.CreateRootAsync(folderId, CancellationToken.None);
+                                if (root != null)
+                                {
+                                    StorageTools._storableRegistry[folderId] = root;
+                                    return true;
+                                }
+                            }
+                            catch
+                            {
+                                // If root creation fails, we'll try again later
+                                return false;
+                            }
+                        }
+                    }
+                    // For mounted folder protocols with paths, try to navigate to them
+                    else if (handler is MountedFolderProtocolHandler mountHandler)
+                    {
+                        try
+                        {
+                            var relativePath = folderId.Substring($"{scheme}://".Length);
+                            if (!string.IsNullOrEmpty(relativePath))
+                            {
+                                var targetItem = await mountHandler.MountedFolder.GetItemByRelativePathAsync(relativePath, CancellationToken.None);
+                                StorageTools._storableRegistry[folderId] = targetItem;
+                                return true;
+                            }
+                        }
+                        catch
+                        {
+                            // If navigation fails, the mount dependency isn't ready yet
+                            return false;
+                        }
+                    }
+                }
+            }
+            
+            // For all other cases during initialization, we can't resolve them yet
+            return false;
         }
         catch
         {

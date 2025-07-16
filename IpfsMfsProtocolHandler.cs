@@ -11,13 +11,13 @@ public class IpfsMfsProtocolHandler : IProtocolHandler
 {
     public bool HasBrowsableRoot => true; // MFS has a browsable root filesystem
 
-    public Task<IStorable?> CreateRootAsync(string rootUri)
+    public Task<IStorable?> CreateRootAsync(string rootUri, CancellationToken cancellationToken = default)
     {
         var client = new IpfsClient();
         return Task.FromResult<IStorable?>(new MfsFolder("/", client));
     }
 
-    public Task<IStorable?> CreateResourceAsync(string resourceUri)
+    public Task<IStorable?> CreateResourceAsync(string resourceUri, CancellationToken cancellationToken = default)
     {
         // MFS doesn't support direct resource creation - items are accessed through the filesystem
         return Task.FromResult<IStorable?>(null);
@@ -28,12 +28,12 @@ public class IpfsMfsProtocolHandler : IProtocolHandler
         return parentId == "mfs://" ? $"mfs://{itemName}" : $"{parentId}/{itemName}";
     }
 
-    public async Task<object?> GetDriveInfoAsync(string rootUri)
+    public async Task<object?> GetDriveInfoAsync(string rootUri, CancellationToken cancellationToken = default)
     {
         try
         {
             var client = new IpfsClient();
-            var repoStats = await client.Stats.RepositoryAsync();
+            var repoStats = await client.Stats.RepositoryAsync(cancellationToken);
             
             return new
             {

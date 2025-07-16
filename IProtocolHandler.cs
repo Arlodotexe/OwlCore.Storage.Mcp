@@ -11,15 +11,17 @@ public interface IProtocolHandler
     /// Creates a root storage item for this protocol if it supports browsable roots
     /// </summary>
     /// <param name="rootUri">The root URI for the protocol</param>
+    /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>The root storage item, or null if this protocol doesn't have browsable roots</returns>
-    Task<IStorable?> CreateRootAsync(string rootUri);
+    Task<IStorable?> CreateRootAsync(string rootUri, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Creates a storage item directly from a resource URI (for protocols that support individual resources)
     /// </summary>
     /// <param name="resourceUri">The resource URI</param>
+    /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>The storage item, or null if this protocol doesn't support direct resource creation</returns>
-    Task<IStorable?> CreateResourceAsync(string resourceUri);
+    Task<IStorable?> CreateResourceAsync(string resourceUri, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Creates an item ID within this protocol
@@ -33,8 +35,9 @@ public interface IProtocolHandler
     /// Gets drive information for this protocol (only for protocols that have browsable roots)
     /// </summary>
     /// <param name="rootUri">The root URI</param>
+    /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>Drive information object, or null if this protocol doesn't have browsable roots</returns>
-    Task<object?> GetDriveInfoAsync(string rootUri);
+    Task<object?> GetDriveInfoAsync(string rootUri, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Checks if this protocol supports browsable roots (shows up in GetAvailableDrives)

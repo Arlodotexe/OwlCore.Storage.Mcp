@@ -10,7 +10,7 @@ public class S3ProtocolHandler : IProtocolHandler
 {
     public bool HasBrowsableRoot => true; // S3 buckets have browsable roots
 
-    public Task<IStorable?> CreateRootAsync(string rootUri)
+    public Task<IStorable?> CreateRootAsync(string rootUri, CancellationToken cancellationToken = default)
     {
         // Example: s3://bucket-name/path
         var bucketName = ExtractBucketName(rootUri);
@@ -23,7 +23,7 @@ public class S3ProtocolHandler : IProtocolHandler
         throw new NotImplementedException("S3 protocol handler needs S3Folder implementation");
     }
 
-    public Task<IStorable?> CreateResourceAsync(string resourceUri)
+    public Task<IStorable?> CreateResourceAsync(string resourceUri, CancellationToken cancellationToken = default)
     {
         // S3 doesn't support direct resource creation - items are accessed through the filesystem
         return Task.FromResult<IStorable?>(null);
@@ -39,7 +39,7 @@ public class S3ProtocolHandler : IProtocolHandler
         return $"{parentId}/{itemName}";
     }
 
-    public Task<object?> GetDriveInfoAsync(string rootUri)
+    public Task<object?> GetDriveInfoAsync(string rootUri, CancellationToken cancellationToken = default)
     {
         // In a real implementation, you'd query S3 for bucket information
         var bucketName = ExtractBucketName(rootUri);
@@ -87,7 +87,7 @@ public class AzureBlobProtocolHandler : IProtocolHandler
 {
     public bool HasBrowsableRoot => true; // Azure Blob containers have browsable roots
 
-    public Task<IStorable?> CreateRootAsync(string rootUri)
+    public Task<IStorable?> CreateRootAsync(string rootUri, CancellationToken cancellationToken = default)
     {
         // Example: azure-blob://accountname/container/path
         var accountName = ExtractAccountName(rootUri);
@@ -101,7 +101,7 @@ public class AzureBlobProtocolHandler : IProtocolHandler
         throw new NotImplementedException("Azure Blob protocol handler needs AzureBlobFolder implementation");
     }
 
-    public Task<IStorable?> CreateResourceAsync(string resourceUri)
+    public Task<IStorable?> CreateResourceAsync(string resourceUri, CancellationToken cancellationToken = default)
     {
         // Azure Blob doesn't support direct resource creation - items are accessed through the filesystem
         return Task.FromResult<IStorable?>(null);
@@ -117,7 +117,7 @@ public class AzureBlobProtocolHandler : IProtocolHandler
         return $"{parentId}/{itemName}";
     }
 
-    public Task<object?> GetDriveInfoAsync(string rootUri)
+    public Task<object?> GetDriveInfoAsync(string rootUri, CancellationToken cancellationToken = default)
     {
         var accountName = ExtractAccountName(rootUri);
         var containerName = ExtractContainerName(rootUri);

@@ -12,14 +12,14 @@ public class IpfsProtocolHandler : IProtocolHandler
 {
     public bool HasBrowsableRoot => false; // IPFS doesn't have a single global root, but individual hashes can point to browsable folders
 
-    public Task<IStorable?> CreateRootAsync(string rootUri)
+    public Task<IStorable?> CreateRootAsync(string rootUri, CancellationToken cancellationToken = default)
     {
         // IPFS protocol doesn't have a single global browsable root
         // Individual IPFS hashes are accessed via CreateResourceAsync
         return Task.FromResult<IStorable?>(null);
     }
 
-    public async Task<IStorable?> CreateResourceAsync(string resourceUri)
+    public async Task<IStorable?> CreateResourceAsync(string resourceUri, CancellationToken cancellationToken = default)
     {
         try
         {
@@ -64,7 +64,7 @@ public class IpfsProtocolHandler : IProtocolHandler
         return $"{parentId.TrimEnd('/')}/{itemName}";
     }
 
-    public Task<object?> GetDriveInfoAsync(string rootUri)
+    public Task<object?> GetDriveInfoAsync(string rootUri, CancellationToken cancellationToken = default)
     {
         // IPFS protocol doesn't have drive info since it doesn't have a global root
         // Individual IPFS resources don't have drive-like properties

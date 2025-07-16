@@ -37,6 +37,40 @@ public static class StorageTools
             // Initialize ProtocolRegistry and restore mounts
             await ProtocolRegistry.EnsureInitializedAsync();
             
+            // CRITICAL: Trigger mount restoration by calling GetMountedFolders()
+            // This ensures mounted folder protocols like "desktop://" are actually registered
+            var mountedFolders = ProtocolRegistry.GetMountedFolders();
+            Console.WriteLine($"Restored {mountedFolders.Length} mounted folders during initialization");
+            
+            // Register mounted folder root URIs in our storable registry
+            foreach (var mount in mountedFolders)
+            {
+                if (mount is IDictionary<string, object> mountDict && 
+                    mountDict.TryGetValue("id", out var idObj) && 
+                    idObj is string mountId &&
+                    mountId.EndsWith("://"))
+                {
+                    // This is a mounted folder root URI - we need to register it
+                    var protocolHandler = ProtocolRegistry.GetProtocolHandler(mountId);
+                    if (protocolHandler?.HasBrowsableRoot == true)
+                    {
+                        try
+                        {
+                            var root = await protocolHandler.CreateRootAsync(mountId, CancellationToken.None);
+                            if (root != null)
+                            {
+                                _storableRegistry[mountId] = root;
+                                Console.WriteLine($"Pre-registered mounted folder root: {mountId}");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"Failed to pre-register mounted folder root {mountId}: {ex.Message}");
+                        }
+                    }
+                }
+            }
+            
             // Pre-register common protocol roots after mount restoration
             foreach (var protocolScheme in ProtocolRegistry.GetRegisteredProtocols())
             {
@@ -46,7 +80,7 @@ public static class StorageTools
                 {
                     try
                     {
-                        var root = await protocolHandler.CreateRootAsync(rootUri);
+                        var root = await protocolHandler.CreateRootAsync(rootUri, CancellationToken.None);
                         if (root != null)
                         {
                             _storableRegistry[rootUri] = root;
@@ -73,14 +107,20 @@ public static class StorageTools
         // Ensure the storage system is fully initialized first
         await EnsureInitializedAsync();
         
-        // Try the original ID first
+        // Check if already registered - if so, we're done
         if (_storableRegistry.ContainsKey(id)) 
         {
             Console.WriteLine($"[STORAGE] Item already registered: {id}");
             return;
         }
 
-        // If not found, try resolving it as a potential alias
+        // Basic validation
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            throw new InvalidOperationException("Storage ID cannot be null, empty, or whitespace");
+        }
+
+        // Try resolving as an alias first
         var resolvedId = ProtocolRegistry.ResolveAliasToFullId(id);
         if (resolvedId != id && _storableRegistry.TryGetValue(resolvedId, out var resolvedItem))
         {
@@ -92,109 +132,99 @@ public static class StorageTools
 
         // Use the resolved ID for registration attempts
         var registrationId = resolvedId;
-        Console.WriteLine($"[STORAGE] Registering item: {registrationId}");
+        Console.WriteLine($"[STORAGE] Attempting to register: {registrationId}");
 
-        try
-        {
-            // Check if this is a custom protocol
-            var protocolHandler = ProtocolRegistry.GetProtocolHandler(registrationId);
-            if (protocolHandler != null)
-            {
-                Console.WriteLine($"[STORAGE] Found protocol handler for {registrationId}: {protocolHandler.GetType().Name}");
-                
-                // For filesystem protocols, try to create a root if this looks like a root URI
-                if (protocolHandler.HasBrowsableRoot && registrationId.EndsWith("://"))
-                {
-                    Console.WriteLine($"[STORAGE] Creating root for filesystem protocol: {registrationId}");
-                    var root = await protocolHandler.CreateRootAsync(registrationId);
-                    if (root != null)
-                    {
-                        _storableRegistry[registrationId] = root;
-                        // Also register the original alias if different
-                        if (id != registrationId)
-                            _storableRegistry[id] = root;
-                        Console.WriteLine($"[STORAGE] Successfully registered root: {registrationId} as {root.GetType().Name}");
-                        return;
-                    }
-                }
-
-                // Try to create a direct resource first (for protocols like HTTP or specific resource URIs)
-                Console.WriteLine($"[STORAGE] Creating resource for: {registrationId}");
-                var resource = await protocolHandler.CreateResourceAsync(registrationId);
-                if (resource != null)
-                {
-                    _storableRegistry[registrationId] = resource;
-                    // Also register the original alias if different
-                    if (id != registrationId)
-                        _storableRegistry[id] = resource;
-                    Console.WriteLine($"[STORAGE] Successfully registered resource: {registrationId} as {resource.GetType().Name}");
-                    return;
-                }
-
-                // Let the protocol handler decide if registration is needed for filesystem-style protocols
-                if (!protocolHandler.NeedsRegistration(registrationId)) 
-                {
-                    // Special case: For mounted folder protocols, we still need to register specific items
-                    // even if the protocol handler says registration isn't needed
-                    if (protocolHandler is MountedFolderProtocolHandler mountHandler && !registrationId.EndsWith("://"))
-                    {
-                        // This is a specific path within a mounted folder - we need to navigate to it
-                        try
-                        {
-                            var relativePath = registrationId.Substring($"{mountHandler.ProtocolScheme}://".Length);
-                            if (!string.IsNullOrEmpty(relativePath))
-                            {
-                                var targetItem = await mountHandler.MountedFolder.GetItemByRelativePathAsync(relativePath);
-                                _storableRegistry[registrationId] = targetItem;
-                                // Also register the original alias if different
-                                if (id != registrationId)
-                                    _storableRegistry[id] = targetItem;
-                                Console.WriteLine($"[STORAGE] Successfully registered mounted folder item: {registrationId} as {targetItem.GetType().Name}");
-                                return;
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"[STORAGE] Failed to navigate to mounted folder item {registrationId}: {ex.Message}");
-                            // Continue to regular "registration not needed" logic
-                        }
-                    }
-                    
-                    Console.WriteLine($"[STORAGE] Protocol handler says registration not needed for: {registrationId}");
-                    return;
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[STORAGE] Error during protocol registration for {registrationId}: {ex.Message}");
-            Console.WriteLine($"[STORAGE] Full exception: {ex}");
-            throw new InvalidOperationException($"Failed to register protocol resource '{registrationId}': {ex.Message}", ex);
-        }
-
-        // Handle regular filesystem paths
+        // Handle regular filesystem paths first (fast path)
         if (Directory.Exists(registrationId))
         {
             var folder = new SystemFolder(new DirectoryInfo(registrationId));
             _storableRegistry[registrationId] = folder;
-            // Also register the original alias if different
             if (id != registrationId)
                 _storableRegistry[id] = folder;
-            Console.WriteLine($"Registered system folder: {registrationId}");
+            Console.WriteLine($"[STORAGE] Registered system folder: {registrationId}");
+            return;
         }
         else if (File.Exists(registrationId))
         {
             var file = new SystemFile(new FileInfo(registrationId));
             _storableRegistry[registrationId] = file;
-            // Also register the original alias if different
             if (id != registrationId)
                 _storableRegistry[id] = file;
-            Console.WriteLine($"Registered system file: {registrationId}");
+            Console.WriteLine($"[STORAGE] Registered system file: {registrationId}");
+            return;
         }
-        else
+
+        // Handle protocol-based IDs
+        if (registrationId.Contains("://"))
         {
-            Console.WriteLine($"Could not register item: {registrationId} (not found in filesystem and no protocol handler)");
+            var scheme = registrationId.Split("://")[0];
+            var pathPart = registrationId.Split("://", 2)[1];
+            
+            var knownProtocols = ProtocolRegistry.GetRegisteredProtocols();
+            if (!knownProtocols.Contains(scheme))
+            {
+                throw new InvalidOperationException($"Unknown protocol scheme '{scheme}' in ID '{registrationId}'. Known protocols: {string.Join(", ", knownProtocols)}. Use GetAvailableDrives() to see available starting points.");
+            }
+
+            // CRITICAL: If this is not a root URI (has a path), and we don't have it registered,
+            // it means the user is trying to use an ID they haven't navigated to yet.
+            // This will cause stalling because we can't register items we haven't seen.
+            if (!string.IsNullOrEmpty(pathPart))
+            {
+                var rootUri = $"{scheme}://";
+                var availableRoots = _storableRegistry.Keys.Where(k => k.EndsWith("://")).ToList();
+                
+                throw new InvalidOperationException(
+                    $"Cannot directly access '{registrationId}' - this ID exists but hasn't been seen at runtime yet. " +
+                    $"Navigation can only start from already-loaded items. " +
+                    $"Start from root '{rootUri}' and navigate to this path using GetItemByRelativePath('{rootUri}', '{pathPart}'). " +
+                    $"Available roots: {string.Join(", ", availableRoots)}");
+            }
+
+            var protocolHandler = ProtocolRegistry.GetProtocolHandler(registrationId);
+            if (protocolHandler == null)
+            {
+                throw new InvalidOperationException($"No protocol handler found for '{scheme}'. Use GetAvailableDrives() to see available protocols.");
+            }
+
+            Console.WriteLine($"[STORAGE] Found protocol handler for {registrationId}: {protocolHandler.GetType().Name}");
+            
+            try
+            {
+                // Only allow registration of root URIs for protocols
+                if (registrationId.EndsWith("://") && protocolHandler.HasBrowsableRoot)
+                {
+                    var root = await protocolHandler.CreateRootAsync(registrationId, CancellationToken.None);
+                    if (root != null)
+                    {
+                        _storableRegistry[registrationId] = root;
+                        if (id != registrationId)
+                            _storableRegistry[id] = root;
+                        Console.WriteLine($"[STORAGE] Successfully registered root: {registrationId}");
+                        return;
+                    }
+                }
+
+                // Try to create a direct resource (for non-filesystem protocols like HTTP)
+                var resource = await protocolHandler.CreateResourceAsync(registrationId, CancellationToken.None);
+                if (resource != null)
+                {
+                    _storableRegistry[registrationId] = resource;
+                    if (id != registrationId)
+                        _storableRegistry[id] = resource;
+                    Console.WriteLine($"[STORAGE] Successfully registered resource: {registrationId}");
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[STORAGE] Failed to register {registrationId}: {ex.Message}");
+                throw new InvalidOperationException($"Failed to access '{registrationId}': {ex.Message}. Use GetAvailableDrives() to see valid starting points.", ex);
+            }
         }
+
+        // If we get here, the item couldn't be registered
+        throw new InvalidOperationException($"Cannot access item '{registrationId}': not found or not accessible. Use GetAvailableDrives() to see valid starting points for navigation.");
     }
 
     internal static string CreateCustomItemId(string parentId, string itemName)
@@ -259,7 +289,7 @@ public static class StorageTools
                 // Only register root if not already registered
                 if (!_storableRegistry.ContainsKey(rootUri))
                 {
-                    var protocolRoot = await protocolHandler.CreateRootAsync(rootUri);
+                    var protocolRoot = await protocolHandler.CreateRootAsync(rootUri, CancellationToken.None);
                     if (protocolRoot != null)
                     {
                         _storableRegistry[rootUri] = protocolRoot;
@@ -267,7 +297,7 @@ public static class StorageTools
                 }
                 
                 // Get drive information from the protocol handler
-                var driveInfo = await protocolHandler.GetDriveInfoAsync(rootUri);
+                var driveInfo = await protocolHandler.GetDriveInfoAsync(rootUri, CancellationToken.None);
                 if (driveInfo != null)
                 {
                     driveInfos.Add(driveInfo);
@@ -283,11 +313,15 @@ public static class StorageTools
         return driveInfos.ToArray();
     }
 
-    [McpServerTool, Description("Lists all items in a folder by ID or path. Works with local folders, IPFS MFS, and IPFS/IPNS folder hashes. Returns array of items with their IDs, names, and types. TIP: For known paths, consider using GetItemByRelativePath instead for direct navigation.")]
+    [McpServerTool, Description("Lists all items in a folder by ID or path. Works with local folders, IPFS MFS, and IPFS/IPNS folder hashes. Returns array of items with their IDs, names, and types. TIP: For direct navigation to known paths, use GetItemByRelativePath with drive roots from GetAvailableDrives() instead of browsing folder by folder. Use SuggestStartingDrive() if unsure which drive to start from.")]
     public static async Task<object[]> GetFolderItems(string folderId)
     {
         try
         {
+            // Quick validation for obviously invalid IDs
+            if (string.IsNullOrWhiteSpace(folderId))
+                throw new McpException("Folder ID cannot be empty", McpErrorCode.InvalidParams);
+
             await EnsureStorableRegistered(folderId);
 
             if (!_storableRegistry.TryGetValue(folderId, out var registeredItem) || registeredItem is not IFolder folder)
@@ -335,6 +369,10 @@ public static class StorageTools
     {
         try
         {
+            // Quick validation for obviously invalid IDs
+            if (string.IsNullOrWhiteSpace(folderId))
+                throw new McpException("Folder ID cannot be empty", McpErrorCode.InvalidParams);
+
             await EnsureStorableRegistered(folderId);
 
             if (!_storableRegistry.TryGetValue(folderId, out var registeredItem) || registeredItem is not IFolder folder)
@@ -377,6 +415,10 @@ public static class StorageTools
     {
         try
         {
+            // Quick validation for obviously invalid IDs
+            if (string.IsNullOrWhiteSpace(folderId))
+                throw new McpException("Folder ID cannot be empty", McpErrorCode.InvalidParams);
+
             await EnsureStorableRegistered(folderId);
 
             if (!_storableRegistry.TryGetValue(folderId, out var registeredItem) || registeredItem is not IFolder folder)
@@ -462,17 +504,26 @@ public static class StorageTools
         }
     }
 
-    [McpServerTool, Description("Navigates to an item using a relative path from a starting item. This is the recommended way to access files - use drive IDs from GetAvailableDrives() as starting points, then navigate with relative paths like 'Documents/Projects/myfile.txt'. This is more efficient than browsing folder by folder.")]
+    [McpServerTool, Description("Navigates to an item using a relative path from a starting item.")]
     public static async Task<object> GetItemByRelativePath(string startingItemId, string relativePath)
     {
         try
         {
+            // Quick validation for obviously invalid IDs
+            if (string.IsNullOrWhiteSpace(startingItemId))
+                throw new McpException("Starting item ID cannot be empty", McpErrorCode.InvalidParams);
+
             await EnsureStorableRegistered(startingItemId);
 
             if (!_storableRegistry.TryGetValue(startingItemId, out var startingItem))
-                throw new McpException($"Starting item with ID '{startingItemId}' not found", McpErrorCode.InvalidParams);
+            {
+                // If the starting item isn't found, provide helpful guidance
+                var availableDrives = await GetAvailableDrives();
+                var driveList = string.Join(", ", availableDrives.Cast<dynamic>().Select(d => $"'{d.id}'"));
+                throw new McpException($"Starting item with ID '{startingItemId}' not found. For new navigation, use drive roots from GetAvailableDrives(): {driveList}", McpErrorCode.InvalidParams);
+            }
 
-            var targetItem = await startingItem.GetItemByRelativePathAsync(relativePath);
+            var targetItem = await startingItem.GetItemByRelativePathAsync(relativePath, CancellationToken.None);
             _storableRegistry[targetItem.Id] = targetItem;
 
             // Use mount alias substitution to present shorter IDs externally
@@ -1000,5 +1051,4 @@ public static class StorageTools
             throw new McpException($"Failed to rename mounted folder '{currentProtocolScheme}': {ex.Message}", ex, McpErrorCode.InternalError);
         }
     }
-
 }

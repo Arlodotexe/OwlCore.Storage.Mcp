@@ -12,14 +12,14 @@ public class IpnsProtocolHandler : IProtocolHandler
 {
     public bool HasBrowsableRoot => false; // IPNS doesn't have a single global root, but individual names can point to browsable folders
 
-    public Task<IStorable?> CreateRootAsync(string rootUri)
+    public Task<IStorable?> CreateRootAsync(string rootUri, CancellationToken cancellationToken = default)
     {
         // IPNS protocol doesn't have a single global browsable root
         // Individual IPNS names are accessed via CreateResourceAsync
         return Task.FromResult<IStorable?>(null);
     }
 
-    public async Task<IStorable?> CreateResourceAsync(string resourceUri)
+    public async Task<IStorable?> CreateResourceAsync(string resourceUri, CancellationToken cancellationToken = default)
     {
         Console.WriteLine($"[IPNS] CreateResourceAsync called with URI: {resourceUri}");
         
@@ -85,7 +85,7 @@ public class IpnsProtocolHandler : IProtocolHandler
         return $"{parentId.TrimEnd('/')}/{itemName}";
     }
 
-    public Task<object?> GetDriveInfoAsync(string rootUri)
+    public Task<object?> GetDriveInfoAsync(string rootUri, CancellationToken cancellationToken = default)
     {
         // IPNS protocol doesn't have drive info since it doesn't have a global root
         // Individual IPNS resources don't have drive-like properties

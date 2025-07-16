@@ -13,13 +13,13 @@ public class MemoryProtocolHandler : IProtocolHandler
 
     public bool HasBrowsableRoot => true; // Memory storage has a browsable root
 
-    public Task<IStorable?> CreateRootAsync(string rootUri)
+    public Task<IStorable?> CreateRootAsync(string rootUri, CancellationToken cancellationToken = default)
     {
         // Always return the same memory root folder
         return Task.FromResult<IStorable?>(_memoryRoot);
     }
 
-    public Task<IStorable?> CreateResourceAsync(string resourceUri)
+    public Task<IStorable?> CreateResourceAsync(string resourceUri, CancellationToken cancellationToken = default)
     {
         // Memory storage doesn't support direct resource creation - items are accessed through the filesystem
         return Task.FromResult<IStorable?>(null);
@@ -36,7 +36,7 @@ public class MemoryProtocolHandler : IProtocolHandler
         return $"{parentId.TrimEnd('/')}/{itemName}";
     }
 
-    public Task<object?> GetDriveInfoAsync(string rootUri)
+    public Task<object?> GetDriveInfoAsync(string rootUri, CancellationToken cancellationToken = default)
     {
         // Simple drive info for memory storage
         return Task.FromResult<object?>(new
