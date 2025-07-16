@@ -492,7 +492,7 @@ public static class StorageTools
 
         return new
         {
-            id = ProtocolRegistry.SubstituteWithMountAlias(storable.Id),
+            id = storable.Id,
             name = storable.Name,
             type = storable switch
             {
