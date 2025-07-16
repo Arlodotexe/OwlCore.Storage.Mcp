@@ -19,8 +19,8 @@ public class IpnsProtocolHandler : IProtocolHandler
 
     public async Task<IStorable?> CreateResourceAsync(string resourceUri)
     {
-        // Extract the IPNS name from the URI (e.g., "ipns://example.com" -> "example.com")
-        var ipnsName = ExtractIpnsName(resourceUri);
+        // Extract the IPNS name and path from the URI (e.g., "ipns://example.com/path" -> "example.com" and "/path")
+        var (ipnsName, ipnsPath) = ExtractIpnsNameAndPath(resourceUri);
         if (string.IsNullOrEmpty(ipnsName))
             throw new ArgumentException($"Could not extract IPNS name from URI: {resourceUri}");
 
@@ -39,7 +39,8 @@ public class IpnsProtocolHandler : IProtocolHandler
         try
         {
             // Format the IPNS address as required by OwlCore.Kubo (must start with /ipns/)
-            var ipnsAddress = $"/ipns/{ipnsName}";
+            // Include the full path: /ipns/domain.com/path
+            var ipnsAddress = $"/ipns/{ipnsName}{ipnsPath}";
             Console.WriteLine($"Creating IPNS folder with address: {ipnsAddress}");
             
             // IpnsFolder can represent either a folder or a file - it will determine the type based on the IPNS name
@@ -48,7 +49,7 @@ public class IpnsProtocolHandler : IProtocolHandler
         }
         catch (Exception ex)
         {
-            throw new InvalidOperationException($"Failed to create IPNS resource for '{ipnsName}': {ex.Message}", ex);
+            throw new InvalidOperationException($"Failed to create IPNS resource for '{ipnsName}{ipnsPath}': {ex.Message}", ex);
         }
     }
 
@@ -82,5 +83,26 @@ public class IpnsProtocolHandler : IProtocolHandler
         var segments = pathPart.Split('/', StringSplitOptions.RemoveEmptyEntries);
         
         return segments.Length > 0 ? segments[0] : string.Empty;
+    }
+
+    private (string name, string path) ExtractIpnsNameAndPath(string ipnsUri)
+    {
+        // Extract name and path from "ipns://example.com/path" -> ("example.com", "/path")
+        if (!ipnsUri.StartsWith("ipns://"))
+            return (string.Empty, string.Empty);
+
+        var pathPart = ipnsUri.Substring(7); // Remove "ipns://"
+        var slashIndex = pathPart.IndexOf('/');
+        
+        if (slashIndex == -1)
+        {
+            // No path, just domain: "ipns://example.com"
+            return (pathPart, string.Empty);
+        }
+        
+        var name = pathPart.Substring(0, slashIndex);
+        var path = pathPart.Substring(slashIndex); // Include the leading slash
+        
+        return (name, path);
     }
 }

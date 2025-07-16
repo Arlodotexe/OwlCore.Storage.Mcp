@@ -15,7 +15,7 @@ The protocol system consists of:
 The system now supports two types of protocols:
 
 ### Filesystem Protocols
-These protocols have browsable roots that appear in `GetAvailableDrives()`:
+These protocols have browsable roots that appear alongside mounted storage in `GetAvailableDrives()`:
 - **IPFS MFS** (`mfs://`) - Mutable File System for IPFS
 - **Memory Storage** (`memory://`) - In-memory temporary storage
 - **Azure Blob** (`azure-blob://`) - Container-based blob storage (example)
