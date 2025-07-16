@@ -1,4 +1,5 @@
 using ModelContextProtocol.Server;
+using ModelContextProtocol;
 using System.ComponentModel;
 using OwlCore.Storage;
 using OwlCore.Storage.System.IO;
@@ -274,287 +275,206 @@ public static class StorageTools
     [McpServerTool, Description("Lists all items in a folder by ID or path. Works with local folders, IPFS MFS, and IPFS/IPNS folder hashes. Returns array of items with their IDs, names, and types.")]
     public static async Task<object[]> GetFolderItems(string folderId)
     {
-        await EnsureStorableRegistered(folderId);
-
-        if (!_storableRegistry.TryGetValue(folderId, out var registeredItem) || registeredItem is not IFolder folder)
-            throw new ArgumentException($"Folder with ID '{folderId}' not found");
-
-        var items = new List<object>();
-        await foreach (var item in folder.GetItemsAsync())
+        try
         {
-            string itemId = ProtocolRegistry.IsCustomProtocol(folderId) ? CreateCustomItemId(folderId, item.Name) : item.Id;
-            _storableRegistry[itemId] = item;
-            
-            // Use mount alias substitution to present shorter IDs externally
-            string externalId = ProtocolRegistry.SubstituteWithMountAlias(itemId);
-            // Ensure the alias also maps to the same item for external access
-            if (externalId != itemId)
-                _storableRegistry[externalId] = item;
-            
-            items.Add(new
-            {
-                id = externalId,
-                name = item.Name,
-                type = item switch
-                {
-                    IFile => "file",
-                    IFolder => "folder",
-                    _ => "unknown"
-                }
-            });
-        }
+            await EnsureStorableRegistered(folderId);
 
-        return items.ToArray();
+            if (!_storableRegistry.TryGetValue(folderId, out var registeredItem) || registeredItem is not IFolder folder)
+                throw new McpException($"Folder with ID '{folderId}' not found", McpErrorCode.InvalidParams);
+
+            var items = new List<object>();
+            await foreach (var item in folder.GetItemsAsync())
+            {
+                string itemId = ProtocolRegistry.IsCustomProtocol(folderId) ? CreateCustomItemId(folderId, item.Name) : item.Id;
+                _storableRegistry[itemId] = item;
+                
+                // Use mount alias substitution to present shorter IDs externally
+                string externalId = ProtocolRegistry.SubstituteWithMountAlias(itemId);
+                // Ensure the alias also maps to the same item for external access
+                if (externalId != itemId)
+                    _storableRegistry[externalId] = item;
+                
+                items.Add(new
+                {
+                    id = externalId,
+                    name = item.Name,
+                    type = item switch
+                    {
+                        IFile => "file",
+                        IFolder => "folder",
+                        _ => "unknown"
+                    }
+                });
+            }
+
+            return items.ToArray();
+        }
+        catch (McpException)
+        {
+            throw; // Re-throw MCP exceptions as-is
+        }
+        catch (Exception ex)
+        {
+            throw new McpException($"Failed to get folder items for '{folderId}': {ex.Message}", ex, McpErrorCode.InternalError);
+        }
     }
 
     [McpServerTool, Description("Lists only files in a folder by ID or path. Returns array of file items.")]
     public static async Task<object[]> GetFolderFiles(string folderId)
     {
-        await EnsureStorableRegistered(folderId);
-
-        if (!_storableRegistry.TryGetValue(folderId, out var registeredItem) || registeredItem is not IFolder folder)
-            throw new ArgumentException($"Folder with ID '{folderId}' not found");
-
-        var files = new List<object>();
-        await foreach (var file in folder.GetFilesAsync())
+        try
         {
-            string fileId = ProtocolRegistry.IsCustomProtocol(folderId) ? CreateCustomItemId(folderId, file.Name) : file.Id;
-            _storableRegistry[fileId] = file;
-            
-            // Use mount alias substitution to present shorter IDs externally
-            string externalId = ProtocolRegistry.SubstituteWithMountAlias(fileId);
-            // Ensure the alias also maps to the same item for external access
-            if (externalId != fileId)
-                _storableRegistry[externalId] = file;
-            
-            files.Add(new
-            {
-                id = externalId,
-                name = file.Name,
-                type = "file"
-            });
-        }
+            await EnsureStorableRegistered(folderId);
 
-        return files.ToArray();
+            if (!_storableRegistry.TryGetValue(folderId, out var registeredItem) || registeredItem is not IFolder folder)
+                throw new McpException($"Folder with ID '{folderId}' not found", McpErrorCode.InvalidParams);
+
+            var files = new List<object>();
+            await foreach (var file in folder.GetFilesAsync())
+            {
+                string fileId = ProtocolRegistry.IsCustomProtocol(folderId) ? CreateCustomItemId(folderId, file.Name) : file.Id;
+                _storableRegistry[fileId] = file;
+                
+                // Use mount alias substitution to present shorter IDs externally
+                string externalId = ProtocolRegistry.SubstituteWithMountAlias(fileId);
+                // Ensure the alias also maps to the same item for external access
+                if (externalId != fileId)
+                    _storableRegistry[externalId] = file;
+                
+                files.Add(new
+                {
+                    id = externalId,
+                    name = file.Name,
+                    type = "file"
+                });
+            }
+
+            return files.ToArray();
+        }
+        catch (McpException)
+        {
+            throw; // Re-throw MCP exceptions as-is
+        }
+        catch (Exception ex)
+        {
+            throw new McpException($"Failed to get folder files for '{folderId}': {ex.Message}", ex, McpErrorCode.InternalError);
+        }
     }
 
     [McpServerTool, Description("Lists only folders in a folder by ID or path. Returns array of folder items.")]
     public static async Task<object[]> GetFolderSubfolders(string folderId)
     {
-        await EnsureStorableRegistered(folderId);
-
-        if (!_storableRegistry.TryGetValue(folderId, out var registeredItem) || registeredItem is not IFolder folder)
-            throw new ArgumentException($"Folder with ID '{folderId}' not found");
-
-        var folders = new List<object>();
-        await foreach (var subfolder in folder.GetFoldersAsync())
+        try
         {
-            string subfolderId = ProtocolRegistry.IsCustomProtocol(folderId) ? CreateCustomItemId(folderId, subfolder.Name) : subfolder.Id;
-            _storableRegistry[subfolderId] = subfolder;
-            
-            // Use mount alias substitution to present shorter IDs externally
-            string externalId = ProtocolRegistry.SubstituteWithMountAlias(subfolderId);
-            // Ensure the alias also maps to the same item for external access
-            if (externalId != subfolderId)
-                _storableRegistry[externalId] = subfolder;
-            
-            folders.Add(new
-            {
-                id = externalId,
-                name = subfolder.Name,
-                type = "folder"
-            });
-        }
+            await EnsureStorableRegistered(folderId);
 
-        return folders.ToArray();
+            if (!_storableRegistry.TryGetValue(folderId, out var registeredItem) || registeredItem is not IFolder folder)
+                throw new McpException($"Folder with ID '{folderId}' not found", McpErrorCode.InvalidParams);
+
+            var folders = new List<object>();
+            await foreach (var subfolder in folder.GetFoldersAsync())
+            {
+                string subfolderId = ProtocolRegistry.IsCustomProtocol(folderId) ? CreateCustomItemId(folderId, subfolder.Name) : subfolder.Id;
+                _storableRegistry[subfolderId] = subfolder;
+                
+                // Use mount alias substitution to present shorter IDs externally
+                string externalId = ProtocolRegistry.SubstituteWithMountAlias(subfolderId);
+                // Ensure the alias also maps to the same item for external access
+                if (externalId != subfolderId)
+                    _storableRegistry[externalId] = subfolder;
+                
+                folders.Add(new
+                {
+                    id = externalId,
+                    name = subfolder.Name,
+                    type = "folder"
+                });
+            }
+
+            return folders.ToArray();
+        }
+        catch (McpException)
+        {
+            throw; // Re-throw MCP exceptions as-is
+        }
+        catch (Exception ex)
+        {
+            throw new McpException($"Failed to get folder subfolders for '{folderId}': {ex.Message}", ex, McpErrorCode.InternalError);
+        }
     }
 
     [McpServerTool, Description("Recursively searches for an item by ID in a folder and all its subfolders.")]
     public static async Task<object?> FindItemRecursively(string folderId, string targetItemId)
     {
-        await EnsureStorableRegistered(folderId);
-
-        if (!_storableRegistry.TryGetValue(folderId, out var registeredItem) || registeredItem is not IFolder folder)
-            throw new ArgumentException($"Folder with ID '{folderId}' not found");
-
         try
         {
-            var foundItem = await folder.GetItemRecursiveAsync(targetItemId);
-            _storableRegistry[foundItem.Id] = foundItem;
+            await EnsureStorableRegistered(folderId);
 
-            // Use mount alias substitution to present shorter IDs externally
-            string externalId = ProtocolRegistry.SubstituteWithMountAlias(foundItem.Id);
-            // Ensure the alias also maps to the same item for external access
-            if (externalId != foundItem.Id)
-                _storableRegistry[externalId] = foundItem;
+            if (!_storableRegistry.TryGetValue(folderId, out var registeredItem) || registeredItem is not IFolder folder)
+                throw new McpException($"Folder with ID '{folderId}' not found", McpErrorCode.InvalidParams);
 
-            return new
+            try
             {
-                id = externalId,
-                name = foundItem.Name,
-                type = foundItem switch
+                var foundItem = await folder.GetItemRecursiveAsync(targetItemId);
+                _storableRegistry[foundItem.Id] = foundItem;
+
+                // Use mount alias substitution to present shorter IDs externally
+                string externalId = ProtocolRegistry.SubstituteWithMountAlias(foundItem.Id);
+                // Ensure the alias also maps to the same item for external access
+                if (externalId != foundItem.Id)
+                    _storableRegistry[externalId] = foundItem;
+
+                return new
                 {
-                    IFile => "file",
-                    IFolder => "folder",
-                    _ => "unknown"
-                }
-            };
+                    id = externalId,
+                    name = foundItem.Name,
+                    type = foundItem switch
+                    {
+                        IFile => "file",
+                        IFolder => "folder",
+                        _ => "unknown"
+                    }
+                };
+            }
+            catch (FileNotFoundException)
+            {
+                return null;
+            }
         }
-        catch (FileNotFoundException)
+        catch (McpException)
         {
-            return null;
+            throw; // Re-throw MCP exceptions as-is
+        }
+        catch (Exception ex)
+        {
+            throw new McpException($"Failed to find item '{targetItemId}' recursively in '{folderId}': {ex.Message}", ex, McpErrorCode.InternalError);
         }
     }
 
     [McpServerTool, Description("Navigates to an item using a relative path from a starting item.")]
     public static async Task<object> GetItemByRelativePath(string startingItemId, string relativePath)
     {
-        await EnsureStorableRegistered(startingItemId);
-
-        if (!_storableRegistry.TryGetValue(startingItemId, out var startingItem))
-            throw new ArgumentException($"Starting item with ID '{startingItemId}' not found");
-
-        var targetItem = await startingItem.GetItemByRelativePathAsync(relativePath);
-        _storableRegistry[targetItem.Id] = targetItem;
-
-        // Use mount alias substitution to present shorter IDs externally
-        string externalId = ProtocolRegistry.SubstituteWithMountAlias(targetItem.Id);
-        // Ensure the alias also maps to the same item for external access
-        if (externalId != targetItem.Id)
-            _storableRegistry[externalId] = targetItem;
-
-        return new
-        {
-            id = externalId,
-            name = targetItem.Name,
-            type = targetItem switch
-            {
-                IFile => "file",
-                IFolder => "folder",
-                _ => "unknown"
-            }
-        };
-    }
-
-    [McpServerTool, Description("Gets the relative path from one folder to another item.")]
-    public static async Task<string> GetRelativePath(string fromFolderId, string toItemId)
-    {
-        await EnsureStorableRegistered(fromFolderId);
-        await EnsureStorableRegistered(toItemId);
-
-        if (!_storableRegistry.TryGetValue(fromFolderId, out var fromItem) || fromItem is not IFolder fromFolder)
-            throw new ArgumentException($"From folder with ID '{fromFolderId}' not found or not a folder");
-
-        if (!_storableRegistry.TryGetValue(toItemId, out var toItem) || toItem is not IStorableChild toChild)
-            throw new ArgumentException($"To item with ID '{toItemId}' not found or not a child item");
-
-        return await fromFolder.GetRelativePathToAsync(toChild);
-    }
-
-    [McpServerTool, Description("Reads the content of a file as bytes by file ID, path, or URL (supports HTTP/HTTPS URLs, IPFS hashes, and IPNS names).")]
-    public static async Task<byte[]> ReadFileAsBytes(string fileId)
-    {
-        await EnsureStorableRegistered(fileId);
-
-        if (!_storableRegistry.TryGetValue(fileId, out var item) || item is not IFile file)
-            throw new ArgumentException($"File with ID '{fileId}' not found");
-
-        return await file.ReadBytesAsync(CancellationToken.None);
-    }
-
-    [McpServerTool, Description("Reads the content of a file as text with specified encoding by file ID, path, or URL (supports HTTP/HTTPS URLs, IPFS hashes, and IPNS names).")]
-    public static async Task<string> ReadFileAsTextWithEncoding(string fileId, string encoding = "UTF-8")
-    {
-        await EnsureStorableRegistered(fileId);
-
-        if (!_storableRegistry.TryGetValue(fileId, out var item) || item is not IFile file)
-            throw new ArgumentException($"File with ID '{fileId}' not found");
-
-        var textEncoding = encoding.ToUpperInvariant() switch
-        {
-            "UTF-8" or "UTF8" => Encoding.UTF8,
-            "UTF-16" or "UTF16" => Encoding.Unicode,
-            "ASCII" => Encoding.ASCII,
-            "UNICODE" => Encoding.Unicode,
-            _ => Encoding.UTF8
-        };
-
-        return await file.ReadTextAsync(textEncoding, CancellationToken.None);
-    }
-
-    [McpServerTool, Description("Gets information about a seen storable item by ID, path, or URL")]
-    public static async Task<object?> GetStorableInfo(string id)
-    {
-        await EnsureStorableRegistered(id);
-
-        if (!_storableRegistry.TryGetValue(id, out var storable))
-            throw new ArgumentException($"Item with ID '{id}' not found");
-
-        return new
-        {
-            id = storable.Id,
-            name = storable.Name,
-            type = storable switch
-            {
-                IFile => "file",
-                IFolder => "folder",
-                _ => "unknown"
-            }
-        };
-    }
-
-    [McpServerTool, Description("Gets the root folder of a storage item by tracing up the parent hierarchy.")]
-    public static async Task<object?> GetRootFolder(string itemId)
-    {
-        await EnsureStorableRegistered(itemId);
-
-        if (!_storableRegistry.TryGetValue(itemId, out var item) || item is not IStorableChild storableChild)
-            throw new ArgumentException($"Item with ID '{itemId}' not found or not a child item");
-
-        var rootFolder = await storableChild.GetRootAsync();
-        if (rootFolder == null)
-            return null;
-
-        _storableRegistry[rootFolder.Id] = rootFolder;
-
-        // Use mount alias substitution to present shorter IDs externally
-        string externalId = ProtocolRegistry.SubstituteWithMountAlias(rootFolder.Id);
-        // Ensure the alias also maps to the same item for external access
-        if (externalId != rootFolder.Id)
-            _storableRegistry[externalId] = rootFolder;
-
-        return new
-        {
-            id = externalId,
-            name = rootFolder.Name,
-            type = "folder"
-        };
-    }
-
-    [McpServerTool, Description("Gets a specific item by ID from a folder.")]
-    public static async Task<object> GetItemById(string folderId, string itemId)
-    {
-        await EnsureStorableRegistered(folderId);
-
-        if (!_storableRegistry.TryGetValue(folderId, out var registeredItem) || registeredItem is not IFolder folder)
-            throw new ArgumentException($"Folder with ID '{folderId}' not found");
-
         try
         {
-            var foundItem = await folder.GetItemAsync(itemId);
-            _storableRegistry[foundItem.Id] = foundItem;
+            await EnsureStorableRegistered(startingItemId);
+
+            if (!_storableRegistry.TryGetValue(startingItemId, out var startingItem))
+                throw new McpException($"Starting item with ID '{startingItemId}' not found", McpErrorCode.InvalidParams);
+
+            var targetItem = await startingItem.GetItemByRelativePathAsync(relativePath);
+            _storableRegistry[targetItem.Id] = targetItem;
 
             // Use mount alias substitution to present shorter IDs externally
-            string externalId = ProtocolRegistry.SubstituteWithMountAlias(foundItem.Id);
+            string externalId = ProtocolRegistry.SubstituteWithMountAlias(targetItem.Id);
             // Ensure the alias also maps to the same item for external access
-            if (externalId != foundItem.Id)
-                _storableRegistry[externalId] = foundItem;
+            if (externalId != targetItem.Id)
+                _storableRegistry[externalId] = targetItem;
 
             return new
             {
                 id = externalId,
-                name = foundItem.Name,
-                type = foundItem switch
+                name = targetItem.Name,
+                type = targetItem switch
                 {
                     IFile => "file",
                     IFolder => "folder",
@@ -562,38 +482,290 @@ public static class StorageTools
                 }
             };
         }
-        catch (FileNotFoundException)
+        catch (McpException)
         {
-            throw new ArgumentException($"Item with ID '{itemId}' not found in folder '{folder.Name}'");
+            throw; // Re-throw MCP exceptions as-is
+        }
+        catch (Exception ex)
+        {
+            throw new McpException($"Failed to navigate to '{relativePath}' from '{startingItemId}': {ex.Message}", ex, McpErrorCode.InternalError);
+        }
+    }
+
+    [McpServerTool, Description("Gets the relative path from one folder to another item.")]
+    public static async Task<string> GetRelativePath(string fromFolderId, string toItemId)
+    {
+        try
+        {
+            await EnsureStorableRegistered(fromFolderId);
+            await EnsureStorableRegistered(toItemId);
+
+            if (!_storableRegistry.TryGetValue(fromFolderId, out var fromItem) || fromItem is not IFolder fromFolder)
+                throw new McpException($"From folder with ID '{fromFolderId}' not found or not a folder", McpErrorCode.InvalidParams);
+
+            if (!_storableRegistry.TryGetValue(toItemId, out var toItem) || toItem is not IStorableChild toChild)
+                throw new McpException($"To item with ID '{toItemId}' not found or not a child item", McpErrorCode.InvalidParams);
+
+            return await fromFolder.GetRelativePathToAsync(toChild);
+        }
+        catch (McpException)
+        {
+            throw; // Re-throw MCP exceptions as-is
+        }
+        catch (Exception ex)
+        {
+            throw new McpException($"Failed to get relative path from '{fromFolderId}' to '{toItemId}': {ex.Message}", ex, McpErrorCode.InternalError);
+        }
+    }
+
+    [McpServerTool, Description("Reads the content of a file as bytes by file ID, path, or URL (supports HTTP/HTTPS URLs, IPFS hashes, and IPNS names).")]
+    public static async Task<byte[]> ReadFileAsBytes(string fileId)
+    {
+        try
+        {
+            await EnsureStorableRegistered(fileId);
+
+            if (!_storableRegistry.TryGetValue(fileId, out var item) || item is not IFile file)
+                throw new McpException($"File with ID '{fileId}' not found", McpErrorCode.InvalidParams);
+
+            return await file.ReadBytesAsync(CancellationToken.None);
+        }
+        catch (McpException)
+        {
+            throw; // Re-throw MCP exceptions as-is
+        }
+        catch (Exception ex)
+        {
+            throw new McpException($"Failed to read bytes from file '{fileId}': {ex.Message}", ex, McpErrorCode.InternalError);
+        }
+    }
+
+    [McpServerTool, Description("Reads the content of a file as text with specified encoding by file ID, path, or URL (supports HTTP/HTTPS URLs, IPFS hashes, and IPNS names).")]
+    public static async Task<string> ReadFileAsTextWithEncoding(string fileId, string encoding = "UTF-8")
+    {
+        try
+        {
+            await EnsureStorableRegistered(fileId);
+
+            if (!_storableRegistry.TryGetValue(fileId, out var item) || item is not IFile file)
+                throw new McpException($"File with ID '{fileId}' not found", McpErrorCode.InvalidParams);
+
+            var textEncoding = encoding.ToUpperInvariant() switch
+            {
+                "UTF-8" or "UTF8" => Encoding.UTF8,
+                "UTF-16" or "UTF16" => Encoding.Unicode,
+                "ASCII" => Encoding.ASCII,
+                "UNICODE" => Encoding.Unicode,
+                _ => Encoding.UTF8
+            };
+
+            return await file.ReadTextAsync(textEncoding, CancellationToken.None);
+        }
+        catch (McpException)
+        {
+            throw; // Re-throw MCP exceptions as-is
+        }
+        catch (Exception ex)
+        {
+            throw new McpException($"Failed to read text with encoding '{encoding}' from file '{fileId}': {ex.Message}", ex, McpErrorCode.InternalError);
+        }
+    }
+
+    [McpServerTool, Description("Reads a specific range of text from a file by line numbers (1-based indexing). To read from startLine to end of file, omit endLine parameter. To read specific range, provide both startLine and endLine. endLine must be >= startLine and <= total lines. Do NOT use endLine=0, use null or omit it.")]
+    public static async Task<string> ReadFileTextRange(string fileId, int startLine, int? endLine = null)
+    {
+        try
+        {
+            await EnsureStorableRegistered(fileId);
+
+            if (!_storableRegistry.TryGetValue(fileId, out var item) || item is not IFile file)
+                throw new McpException($"File with ID '{fileId}' not found", McpErrorCode.InvalidParams);
+
+            // Explicitly reject endLine of 0 since it's invalid (1-based indexing)
+            if (endLine.HasValue && endLine.Value <= 0)
+                throw new McpException($"Invalid endLine value: {endLine.Value}. endLine must be >= 1 (1-based indexing) or null to read to end. To read to end, omit endLine entirely.", McpErrorCode.InvalidParams);
+
+            var content = await file.ReadTextAsync(CancellationToken.None);
+            var lines = content.Split('\n');
+            
+            // Validate line numbers (1-based)
+            if (startLine < 1 || startLine > lines.Length)
+                throw new McpException($"Invalid startLine: {startLine}. Must be between 1 and {lines.Length} (file has {lines.Length} lines)", McpErrorCode.InvalidParams);
+            
+            int actualEndLine = endLine ?? lines.Length;
+            if (actualEndLine < startLine || actualEndLine > lines.Length)
+                throw new McpException($"Invalid endLine: {actualEndLine}. Must be between {startLine} and {lines.Length}", McpErrorCode.InvalidParams);
+
+            // Extract the requested range (convert to 0-based indexing)
+            var selectedLines = lines[(startLine - 1)..actualEndLine];
+            return string.Join('\n', selectedLines);
+        }
+        catch (McpException)
+        {
+            throw; // Re-throw MCP exceptions as-is
+        }
+        catch (Exception ex)
+        {
+            throw new McpException($"Failed to read text range (lines {startLine}-{endLine}) from file '{fileId}': {ex.Message}", ex, McpErrorCode.InternalError);
+        }
+    }
+
+    [McpServerTool, Description("Gets information about a seen storable item by ID, path, or URL")]
+    public static async Task<object?> GetStorableInfo(string id)
+    {
+        try
+        {
+            await EnsureStorableRegistered(id);
+
+            if (!_storableRegistry.TryGetValue(id, out var storable))
+                throw new McpException($"Item with ID '{id}' not found", McpErrorCode.InvalidParams);
+
+            return new
+            {
+                id = storable.Id,
+                name = storable.Name,
+                type = storable switch
+                {
+                    IFile => "file",
+                    IFolder => "folder",
+                    _ => "unknown"
+                }
+            };
+        }
+        catch (McpException)
+        {
+            throw; // Re-throw MCP exceptions as-is
+        }
+        catch (Exception ex)
+        {
+            throw new McpException($"Failed to get storable info for '{id}': {ex.Message}", ex, McpErrorCode.InternalError);
+        }
+    }
+
+    [McpServerTool, Description("Gets the root folder of a storage item by tracing up the parent hierarchy.")]
+    public static async Task<object?> GetRootFolder(string itemId)
+    {
+        try
+        {
+            await EnsureStorableRegistered(itemId);
+
+            if (!_storableRegistry.TryGetValue(itemId, out var item) || item is not IStorableChild storableChild)
+                throw new McpException($"Item with ID '{itemId}' not found or not a child item", McpErrorCode.InvalidParams);
+
+            var rootFolder = await storableChild.GetRootAsync();
+            if (rootFolder == null)
+                return null;
+
+            _storableRegistry[rootFolder.Id] = rootFolder;
+
+            // Use mount alias substitution to present shorter IDs externally
+            string externalId = ProtocolRegistry.SubstituteWithMountAlias(rootFolder.Id);
+            // Ensure the alias also maps to the same item for external access
+            if (externalId != rootFolder.Id)
+                _storableRegistry[externalId] = rootFolder;
+
+            return new
+            {
+                id = externalId,
+                name = rootFolder.Name,
+                type = "folder"
+            };
+        }
+        catch (McpException)
+        {
+            throw; // Re-throw MCP exceptions as-is
+        }
+        catch (Exception ex)
+        {
+            throw new McpException($"Failed to get root folder for '{itemId}': {ex.Message}", ex, McpErrorCode.InternalError);
+        }
+    }
+
+    [McpServerTool, Description("Gets a specific item by ID from a folder.")]
+    public static async Task<object> GetItemById(string folderId, string itemId)
+    {
+        try
+        {
+            await EnsureStorableRegistered(folderId);
+
+            if (!_storableRegistry.TryGetValue(folderId, out var registeredItem) || registeredItem is not IFolder folder)
+                throw new McpException($"Folder with ID '{folderId}' not found", McpErrorCode.InvalidParams);
+
+            try
+            {
+                var foundItem = await folder.GetItemAsync(itemId);
+                _storableRegistry[foundItem.Id] = foundItem;
+
+                // Use mount alias substitution to present shorter IDs externally
+                string externalId = ProtocolRegistry.SubstituteWithMountAlias(foundItem.Id);
+                // Ensure the alias also maps to the same item for external access
+                if (externalId != foundItem.Id)
+                    _storableRegistry[externalId] = foundItem;
+
+                return new
+                {
+                    id = externalId,
+                    name = foundItem.Name,
+                    type = foundItem switch
+                    {
+                        IFile => "file",
+                        IFolder => "folder",
+                        _ => "unknown"
+                    }
+                };
+            }
+            catch (FileNotFoundException)
+            {
+                throw new McpException($"Item with ID '{itemId}' not found in folder '{folder.Name}'", McpErrorCode.InvalidParams);
+            }
+        }
+        catch (McpException)
+        {
+            throw; // Re-throw MCP exceptions as-is
+        }
+        catch (Exception ex)
+        {
+            throw new McpException($"Failed to get item '{itemId}' from folder '{folderId}': {ex.Message}", ex, McpErrorCode.InternalError);
         }
     }
 
     [McpServerTool, Description("Gets the parent folder of a storage item.")]
     public static async Task<object?> GetParentFolder(string itemId)
     {
-        await EnsureStorableRegistered(itemId);
-
-        if (!_storableRegistry.TryGetValue(itemId, out var item) || item is not IStorableChild storableChild)
-            throw new ArgumentException($"Item with ID '{itemId}' not found or not a child item");
-
-        var parentFolder = await storableChild.GetParentAsync();
-        if (parentFolder == null)
-            return null;
-
-        _storableRegistry[parentFolder.Id] = parentFolder;
-
-        // Use mount alias substitution to present shorter IDs externally
-        string externalId = ProtocolRegistry.SubstituteWithMountAlias(parentFolder.Id);
-        // Ensure the alias also maps to the same item for external access
-        if (externalId != parentFolder.Id)
-            _storableRegistry[externalId] = parentFolder;
-
-        return new
+        try
         {
-            id = externalId,
-            name = parentFolder.Name,
-            type = "folder"
-        };
+            await EnsureStorableRegistered(itemId);
+
+            if (!_storableRegistry.TryGetValue(itemId, out var item) || item is not IStorableChild storableChild)
+                throw new McpException($"Item with ID '{itemId}' not found or not a child item", McpErrorCode.InvalidParams);
+
+            var parentFolder = await storableChild.GetParentAsync();
+            if (parentFolder == null)
+                return null;
+
+            _storableRegistry[parentFolder.Id] = parentFolder;
+
+            // Use mount alias substitution to present shorter IDs externally
+            string externalId = ProtocolRegistry.SubstituteWithMountAlias(parentFolder.Id);
+            // Ensure the alias also maps to the same item for external access
+            if (externalId != parentFolder.Id)
+                _storableRegistry[externalId] = parentFolder;
+
+            return new
+            {
+                id = externalId,
+                name = parentFolder.Name,
+                type = "folder"
+            };
+        }
+        catch (McpException)
+        {
+            throw; // Re-throw MCP exceptions as-is
+        }
+        catch (Exception ex)
+        {
+            throw new McpException($"Failed to get parent folder of item '{itemId}': {ex.Message}", ex, McpErrorCode.InternalError);
+        }
     }
 
     [McpServerTool, Description("Lists all supported storage protocols and their capabilities")]
@@ -649,27 +821,27 @@ public static class StorageTools
         [Description("The custom protocol scheme to use (e.g., 'myproject', 'backup', 'archive')")] string protocolScheme,
         [Description("Display name for the mounted folder")] string mountName)
     {
-        if (string.IsNullOrWhiteSpace(folderId))
-            throw new ArgumentException("Folder ID cannot be null or empty", nameof(folderId));
-        
-        if (string.IsNullOrWhiteSpace(protocolScheme))
-            throw new ArgumentException("Protocol scheme cannot be null or empty", nameof(protocolScheme));
-        
-        if (string.IsNullOrWhiteSpace(mountName))
-            throw new ArgumentException("Mount name cannot be null or empty", nameof(mountName));
-
-        // Validate protocol scheme format
-        if (protocolScheme.Contains("://") || protocolScheme.Contains("/") || protocolScheme.Contains("\\"))
-            throw new ArgumentException("Protocol scheme must be a simple identifier without special characters", nameof(protocolScheme));
-
-        // Ensure the folder exists and is accessible
-        await EnsureStorableRegistered(folderId);
-        
-        if (!_storableRegistry.TryGetValue(folderId, out var registeredItem) || registeredItem is not IFolder folder)
-            throw new ArgumentException($"Folder with ID '{folderId}' not found", nameof(folderId));
-
         try
         {
+            if (string.IsNullOrWhiteSpace(folderId))
+                throw new McpException("Folder ID cannot be null or empty", McpErrorCode.InvalidParams);
+            
+            if (string.IsNullOrWhiteSpace(protocolScheme))
+                throw new McpException("Protocol scheme cannot be null or empty", McpErrorCode.InvalidParams);
+            
+            if (string.IsNullOrWhiteSpace(mountName))
+                throw new McpException("Mount name cannot be null or empty", McpErrorCode.InvalidParams);
+
+            // Validate protocol scheme format
+            if (protocolScheme.Contains("://") || protocolScheme.Contains("/") || protocolScheme.Contains("\\"))
+                throw new McpException("Protocol scheme must be a simple identifier without special characters", McpErrorCode.InvalidParams);
+
+            // Ensure the folder exists and is accessible
+            await EnsureStorableRegistered(folderId);
+            
+            if (!_storableRegistry.TryGetValue(folderId, out var registeredItem) || registeredItem is not IFolder folder)
+                throw new McpException($"Folder with ID '{folderId}' not found", McpErrorCode.InvalidParams);
+
             var rootUri = ProtocolRegistry.MountFolder(folder, protocolScheme, mountName, folderId);
             
             // Register the mounted root in our storable registry
@@ -692,9 +864,17 @@ public static class StorageTools
                 message = $"Successfully mounted '{mountName}' as {protocolScheme}://"
             };
         }
+        catch (McpException)
+        {
+            throw; // Re-throw MCP exceptions as-is
+        }
         catch (ArgumentException ex)
         {
-            throw new ArgumentException($"Failed to mount folder: {ex.Message}", ex);
+            throw new McpException($"Failed to mount folder: {ex.Message}", ex, McpErrorCode.InvalidParams);
+        }
+        catch (Exception ex)
+        {
+            throw new McpException($"Failed to mount folder '{folderId}': {ex.Message}", ex, McpErrorCode.InternalError);
         }
     }
 
@@ -702,39 +882,50 @@ public static class StorageTools
     public static async Task<object> UnmountFolder(
         [Description("The protocol scheme of the mounted folder to unmount")] string protocolScheme)
     {
-        if (string.IsNullOrWhiteSpace(protocolScheme))
-            throw new ArgumentException("Protocol scheme cannot be null or empty", nameof(protocolScheme));
+        try
+        {
+            if (string.IsNullOrWhiteSpace(protocolScheme))
+                throw new McpException("Protocol scheme cannot be null or empty", McpErrorCode.InvalidParams);
 
-        var wasUnmounted = ProtocolRegistry.UnmountFolder(protocolScheme);
-        
-        if (wasUnmounted)
-        {
-            // Remove from storable registry as well
-            var rootUri = $"{protocolScheme}://";
-            _storableRegistry.TryRemove(rootUri, out _);
+            var wasUnmounted = ProtocolRegistry.UnmountFolder(protocolScheme);
             
-            // Save the mount settings to persist the change
-            var mountSettings = ProtocolRegistry.GetMountSettings();
-            if (mountSettings != null)
+            if (wasUnmounted)
             {
-                await mountSettings.SaveAsync();
+                // Remove from storable registry as well
+                var rootUri = $"{protocolScheme}://";
+                _storableRegistry.TryRemove(rootUri, out _);
+                
+                // Save the mount settings to persist the change
+                var mountSettings = ProtocolRegistry.GetMountSettings();
+                if (mountSettings != null)
+                {
+                    await mountSettings.SaveAsync();
+                }
+                
+                return new
+                {
+                    success = true,
+                    protocolScheme = protocolScheme,
+                    message = $"Successfully unmounted {protocolScheme}://"
+                };
             }
-            
-            return new
+            else
             {
-                success = true,
-                protocolScheme = protocolScheme,
-                message = $"Successfully unmounted {protocolScheme}://"
-            };
+                return new
+                {
+                    success = false,
+                    protocolScheme = protocolScheme,
+                    message = $"Protocol scheme '{protocolScheme}' not found or is not a mounted folder"
+                };
+            }
         }
-        else
+        catch (McpException)
         {
-            return new
-            {
-                success = false,
-                protocolScheme = protocolScheme,
-                message = $"Protocol scheme '{protocolScheme}' not found or is not a mounted folder"
-            };
+            throw; // Re-throw MCP exceptions as-is
+        }
+        catch (Exception ex)
+        {
+            throw new McpException($"Failed to unmount folder '{protocolScheme}': {ex.Message}", ex, McpErrorCode.InternalError);
         }
     }
 
@@ -751,11 +942,11 @@ public static class StorageTools
         [Description("The new protocol scheme (optional, leave empty to keep current)")] string? newProtocolScheme = null,
         [Description("The new display name (optional, leave empty to keep current)")] string? newMountName = null)
     {
-        if (string.IsNullOrWhiteSpace(currentProtocolScheme))
-            throw new ArgumentException("Current protocol scheme cannot be null or empty", nameof(currentProtocolScheme));
-
         try
         {
+            if (string.IsNullOrWhiteSpace(currentProtocolScheme))
+                throw new McpException("Current protocol scheme cannot be null or empty", McpErrorCode.InvalidParams);
+
             var newRootUri = ProtocolRegistry.RenameMountedFolder(currentProtocolScheme, newProtocolScheme, newMountName);
             
             // Update storable registry if protocol scheme changed
@@ -785,9 +976,18 @@ public static class StorageTools
                 message = $"Successfully renamed mount to {newRootUri}"
             };
         }
+        catch (McpException)
+        {
+            throw; // Re-throw MCP exceptions as-is
+        }
         catch (ArgumentException ex)
         {
-            throw new ArgumentException($"Failed to rename mounted folder: {ex.Message}", ex);
+            throw new McpException($"Failed to rename mounted folder: {ex.Message}", ex, McpErrorCode.InvalidParams);
+        }
+        catch (Exception ex)
+        {
+            throw new McpException($"Failed to rename mounted folder '{currentProtocolScheme}': {ex.Message}", ex, McpErrorCode.InternalError);
         }
     }
+
 }
