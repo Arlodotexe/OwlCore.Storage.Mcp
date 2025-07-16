@@ -403,8 +403,8 @@ public static class StorageTools
         }
     }
 
-    [McpServerTool, Description("Finds an item with a known ID by recursively searching through a folder hierarchy. The targetItemId must be a known storable ID, not a filename or search term.")]
-    public static async Task<object?> FindItemRecursively(string folderId, string targetItemId)
+    [McpServerTool, Description("Gets an item with a known ID by recursively searching through a folder hierarchy. The targetItemId must be a known storable ID, not a filename or search term.")]
+    public static async Task<object?> GetItemRecursively(string folderId, string targetItemId)
     {
         try
         {
