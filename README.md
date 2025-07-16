@@ -18,7 +18,7 @@ This project bridges the gap between different storage systems by providing a co
 
 1. **Clone and build the project**:
    ```bash
-   git clone [repository-url]
+   git clone https://github.com/Arlodotexe/OwlCore.Storage.Mcp.git
    cd OwlCore.Storage.Mcp
    dotnet build
    ```
