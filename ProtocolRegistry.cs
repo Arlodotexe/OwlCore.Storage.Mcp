@@ -25,9 +25,17 @@ public static class ProtocolRegistry
         // Add more protocols here as needed
         // RegisterProtocol("azure-blob", new AzureBlobProtocolHandler());
         // RegisterProtocol("s3", new S3ProtocolHandler());
+    }
 
-        // Initialize settings and restore persisted mounts
-        _ = Task.Run(InitializeSettingsAndRestoreMountsAsync);
+    /// <summary>
+    /// Ensures mount settings are initialized and mounts are restored
+    /// Call this once during application startup
+    /// </summary>
+    public static async Task EnsureInitializedAsync()
+    {
+        if (_mountSettings != null) return; // Already initialized
+        
+        await InitializeSettingsAndRestoreMountsAsync();
     }
 
     /// <summary>
@@ -71,6 +79,11 @@ public static class ProtocolRegistry
                             
                             _protocolHandlers[mountConfig.ProtocolScheme] = handler;
                             _mountedFolders[mountConfig.ProtocolScheme] = handler;
+                            
+                            // CRITICAL: Register the mounted root in the storage registry BEFORE continuing
+                            // This ensures dependent mounts can find the protocol when they try to register
+                            var rootUri = $"{mountConfig.ProtocolScheme}://";
+                            StorageTools._storableRegistry[rootUri] = folder;
                             
                             restoredCount++;
                             Console.WriteLine($"Restored mount: {mountConfig.ProtocolScheme}:// -> {mountConfig.OriginalFolderId}");
@@ -188,9 +201,10 @@ public static class ProtocolRegistry
     /// <param name="folder">The folder to mount</param>
     /// <param name="protocolScheme">The custom protocol scheme (e.g., "mydata", "project1")</param>
     /// <param name="mountName">Display name for the mounted folder</param>
+    /// <param name="originalFolderId">The original folder ID to preserve in settings (optional)</param>
     /// <returns>The root URI for the mounted folder</returns>
     /// <exception cref="ArgumentException">Thrown if the protocol scheme is already registered</exception>
-    public static string MountFolder(IFolder folder, string protocolScheme, string mountName)
+    public static string MountFolder(IFolder folder, string protocolScheme, string mountName, string? originalFolderId = null)
     {
         if (string.IsNullOrWhiteSpace(protocolScheme))
             throw new ArgumentException("Protocol scheme cannot be null or empty", nameof(protocolScheme));
@@ -213,9 +227,11 @@ public static class ProtocolRegistry
         _mountedFolders[protocolScheme] = handler;
         
         // Persist the mount configuration
-        if (_mountSettings != null && folder is IStorableChild storableChild)
+        if (_mountSettings != null)
         {
-            _mountSettings.AddOrUpdateMount(protocolScheme, storableChild.Id, mountName);
+            // Use the original folder ID if provided, otherwise fall back to the folder's ID
+            var folderIdToStore = originalFolderId ?? (folder is IStorableChild storableChild ? storableChild.Id : folder.Id);
+            _mountSettings.AddOrUpdateMount(protocolScheme, folderIdToStore, mountName);
         }
         
         return rootUri;
@@ -354,6 +370,14 @@ public static class ProtocolRegistry
     public static bool IsMountedFolder(string protocolScheme)
     {
         return _mountedFolders.ContainsKey(protocolScheme);
+    }
+
+    /// <summary>
+    /// Gets the mount settings instance for external saving operations
+    /// </summary>
+    internal static MountSettings? GetMountSettings()
+    {
+        return _mountSettings;
     }
 
     /// <summary>

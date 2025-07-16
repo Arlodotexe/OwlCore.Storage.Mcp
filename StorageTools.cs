@@ -13,19 +13,37 @@ namespace OwlCore.Storage.Mcp;
 public static class StorageTools
 {
     internal static readonly ConcurrentDictionary<string, IStorable> _storableRegistry = new();
+    private static volatile bool _isInitialized = false;
+    private static readonly SemaphoreSlim _initializationSemaphore = new(1, 1);
     
     static StorageTools()
     {
-        // Pre-register common protocol roots at startup to avoid on-demand issues
-        _ = Task.Run(async () =>
+        // Don't do async work in static constructor - just ensure basic setup
+    }
+
+    /// <summary>
+    /// Ensures that the storage system is fully initialized before proceeding
+    /// </summary>
+    private static async Task EnsureInitializedAsync()
+    {
+        if (_isInitialized) return;
+
+        await _initializationSemaphore.WaitAsync();
+        try
         {
-            try
+            if (_isInitialized) return; // Double-check after acquiring lock
+
+            // Initialize ProtocolRegistry and restore mounts
+            await ProtocolRegistry.EnsureInitializedAsync();
+            
+            // Pre-register common protocol roots after mount restoration
+            foreach (var protocolScheme in ProtocolRegistry.GetRegisteredProtocols())
             {
-                foreach (var protocolScheme in ProtocolRegistry.GetRegisteredProtocols())
+                var rootUri = $"{protocolScheme}://";
+                var protocolHandler = ProtocolRegistry.GetProtocolHandler(rootUri);
+                if (protocolHandler?.HasBrowsableRoot == true)
                 {
-                    var rootUri = $"{protocolScheme}://";
-                    var protocolHandler = ProtocolRegistry.GetProtocolHandler(rootUri);
-                    if (protocolHandler?.HasBrowsableRoot == true)
+                    try
                     {
                         var root = await protocolHandler.CreateRootAsync(rootUri);
                         if (root != null)
@@ -34,17 +52,26 @@ public static class StorageTools
                             Console.WriteLine($"Pre-registered protocol root: {rootUri}");
                         }
                     }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Failed to pre-register {rootUri}: {ex.Message}");
+                    }
                 }
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error pre-registering protocol roots: {ex.Message}");
-            }
-        });
+
+            _isInitialized = true;
+        }
+        finally
+        {
+            _initializationSemaphore.Release();
+        }
     }
 
     internal static async Task EnsureStorableRegistered(string id)
     {
+        // Ensure the storage system is fully initialized first
+        await EnsureInitializedAsync();
+        
         if (_storableRegistry.ContainsKey(id)) 
         {
             Console.WriteLine($"[STORAGE] Item already registered: {id}");
@@ -87,6 +114,29 @@ public static class StorageTools
                 // Let the protocol handler decide if registration is needed for filesystem-style protocols
                 if (!protocolHandler.NeedsRegistration(id)) 
                 {
+                    // Special case: For mounted folder protocols, we still need to register specific items
+                    // even if the protocol handler says registration isn't needed
+                    if (protocolHandler is MountedFolderProtocolHandler mountHandler && !id.EndsWith("://"))
+                    {
+                        // This is a specific path within a mounted folder - we need to navigate to it
+                        try
+                        {
+                            var relativePath = id.Substring($"{mountHandler.ProtocolScheme}://".Length);
+                            if (!string.IsNullOrEmpty(relativePath))
+                            {
+                                var targetItem = await mountHandler.MountedFolder.GetItemByRelativePathAsync(relativePath);
+                                _storableRegistry[id] = targetItem;
+                                Console.WriteLine($"[STORAGE] Successfully registered mounted folder item: {id} as {targetItem.GetType().Name}");
+                                return;
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[STORAGE] Failed to navigate to mounted folder item {id}: {ex.Message}");
+                            // Continue to regular "registration not needed" logic
+                        }
+                    }
+                    
                     Console.WriteLine($"[STORAGE] Protocol handler says registration not needed for: {id}");
                     return;
                 }
@@ -542,10 +592,17 @@ public static class StorageTools
 
         try
         {
-            var rootUri = ProtocolRegistry.MountFolder(folder, protocolScheme, mountName);
+            var rootUri = ProtocolRegistry.MountFolder(folder, protocolScheme, mountName, folderId);
             
             // Register the mounted root in our storable registry
             _storableRegistry[rootUri] = folder;
+            
+            // Save the mount settings to persist the configuration
+            var mountSettings = ProtocolRegistry.GetMountSettings();
+            if (mountSettings != null)
+            {
+                await mountSettings.SaveAsync();
+            }
             
             return new
             {
@@ -564,7 +621,7 @@ public static class StorageTools
     }
 
     [McpServerTool, Description("Unmounts a previously mounted folder, removing it from available drives.")]
-    public static object UnmountFolder(
+    public static async Task<object> UnmountFolder(
         [Description("The protocol scheme of the mounted folder to unmount")] string protocolScheme)
     {
         if (string.IsNullOrWhiteSpace(protocolScheme))
@@ -577,6 +634,13 @@ public static class StorageTools
             // Remove from storable registry as well
             var rootUri = $"{protocolScheme}://";
             _storableRegistry.TryRemove(rootUri, out _);
+            
+            // Save the mount settings to persist the change
+            var mountSettings = ProtocolRegistry.GetMountSettings();
+            if (mountSettings != null)
+            {
+                await mountSettings.SaveAsync();
+            }
             
             return new
             {
@@ -597,13 +661,14 @@ public static class StorageTools
     }
 
     [McpServerTool, Description("Lists all currently mounted folders and their information.")]
-    public static object[] GetMountedFolders()
+    public static async Task<object[]> GetMountedFolders()
     {
+        await ProtocolRegistry.EnsureInitializedAsync();
         return ProtocolRegistry.GetMountedFolders();
     }
 
     [McpServerTool, Description("Renames a mounted folder's protocol scheme and/or display name. Preserves all existing references and dependencies.")]
-    public static object RenameMountedFolder(
+    public static async Task<object> RenameMountedFolder(
         [Description("The current protocol scheme to rename")] string currentProtocolScheme,
         [Description("The new protocol scheme (optional, leave empty to keep current)")] string? newProtocolScheme = null,
         [Description("The new display name (optional, leave empty to keep current)")] string? newMountName = null)
@@ -623,6 +688,13 @@ public static class StorageTools
                 {
                     _storableRegistry[newRootUri] = folder;
                 }
+            }
+            
+            // Save the mount settings to persist the change
+            var mountSettings = ProtocolRegistry.GetMountSettings();
+            if (mountSettings != null)
+            {
+                await mountSettings.SaveAsync();
             }
             
             return new
