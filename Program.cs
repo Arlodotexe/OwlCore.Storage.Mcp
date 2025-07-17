@@ -11,6 +11,10 @@ using System.Collections.Concurrent;
 using ModelContextProtocol.Protocol;
 using System.Diagnostics;
 
+// Ensure proper UTF-8 encoding for console output
+Console.OutputEncoding = Encoding.UTF8;
+Console.InputEncoding = Encoding.UTF8;
+
 var builder = Host.CreateApplicationBuilder(args);
 builder.Logging.AddConsole(consoleLogOptions =>
 {
@@ -22,6 +26,9 @@ builder.Services
     .AddMcpServer()
     .WithStdioServerTransport()
     .WithToolsFromAssembly();
+
+// Initialize storage system and restore mounts before starting the server
+await ProtocolRegistry.EnsureInitializedAsync();
 
 await builder.Build().RunAsync();
 
@@ -75,7 +82,7 @@ public static class FileLauncherTool
 
             // Resolve any protocol aliases to actual file paths
             var resolvedPath = ProtocolRegistry.ResolveAliasToFullId(filePath);
-            
+
             // Check if the resolved path is a local file that exists
             if (!File.Exists(resolvedPath))
             {
@@ -93,7 +100,6 @@ public static class FileLauncherTool
             };
 
             var process = Process.Start(processStartInfo);
-            
             if (process != null)
             {
                 // Show both original and resolved paths if they differ
