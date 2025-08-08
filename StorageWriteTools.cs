@@ -240,26 +240,18 @@ public static partial class StorageWriteTools
 
             if (item is IChildFile childFile)
             {
-                // Use the efficient MoveFromAsync extension method
-                var movedFile = await targetModifiableFolder.MoveFromAsync(childFile, sourceModifiableFolder, false);
-                newItem = movedFile;
-                
-                // If renaming is needed and the name is different, we'd need additional logic
+                IChildFile movedFile;
                 if (finalName != item.Name)
                 {
-                    // Note: Renaming during move is not directly supported by the extension method
-                    // For now, we'll keep the original name
-                    finalName = movedFile.Name;
+                    // Use the new 4-parameter overload with rename support
+                    movedFile = await targetModifiableFolder.MoveFromAsync(childFile, sourceModifiableFolder, false, finalName);
                 }
-            }
-            else if (item is IFile sourceFile)
-            {
-                // Fallback for IFile that's not IChildFile - use copy and delete
-                var copiedFile = await targetModifiableFolder.CreateCopyOfAsync(sourceFile, false);
-                newItem = copiedFile;
-                
-                // Delete the original after successful copy
-                await sourceModifiableFolder.DeleteAsync(storableChild);
+                else
+                {
+                    // Use the existing 3-parameter overload
+                    movedFile = await targetModifiableFolder.MoveFromAsync(childFile, sourceModifiableFolder, false);
+                }
+                newItem = movedFile;
             }
             else if (item is IFolder sourceFolder)
             {
@@ -323,8 +315,21 @@ public static partial class StorageWriteTools
 
             try
             {
-                // Try the efficient method first
-                var copiedFile = await targetModifiableFolder.CreateCopyOfAsync(sourceFile, overwrite);
+                // Determine the target file name
+                var targetFileName = !string.IsNullOrEmpty(newName) ? newName : sourceFile.Name;
+                
+                // Use the OwlCore.Storage 0.13.0 extension method with rename support
+                IChildFile copiedFile;
+                if (!string.IsNullOrEmpty(newName) && newName != sourceFile.Name)
+                {
+                    // Use the new 4-parameter overload with rename support
+                    copiedFile = await targetModifiableFolder.CreateCopyOfAsync(sourceFile, overwrite, targetFileName);
+                }
+                else
+                {
+                    // Use the existing 3-parameter overload 
+                    copiedFile = await targetModifiableFolder.CreateCopyOfAsync(sourceFile, overwrite);
+                }
                 
                 string newFileId = ProtocolRegistry.IsCustomProtocol(targetParentFolderId) ? 
                     StorageTools.CreateCustomItemId(targetParentFolderId, copiedFile.Name) : 
@@ -395,11 +400,18 @@ public static partial class StorageWriteTools
             if (!_storableRegistry.TryGetValue(targetParentFolderId, out var targetParent) || targetParent is not IModifiableFolder targetModifiableFolder)
                 throw new McpException($"Target folder with ID '{targetParentFolderId}' not found or not modifiable", McpErrorCode.InvalidParams);
 
-            // Use the OwlCore.Storage extension method for efficient moving
-            var movedFile = await targetModifiableFolder.MoveFromAsync(sourceFile, sourceModifiableFolder, overwrite);
-            
-            // If a new name was specified, the extension method doesn't support renaming during move
-            // So we'd need to rename after the move, but for now we'll use the original name
+            // Use the OwlCore.Storage extension method for efficient moving with rename support (0.13.0)
+            IChildFile movedFile;
+            if (!string.IsNullOrEmpty(newName) && newName != sourceFile.Name)
+            {
+                // Use the new 4-parameter overload with rename support
+                movedFile = await targetModifiableFolder.MoveFromAsync(sourceFile, sourceModifiableFolder, overwrite, newName);
+            }
+            else
+            {
+                // Use the existing 3-parameter overload
+                movedFile = await targetModifiableFolder.MoveFromAsync(sourceFile, sourceModifiableFolder, overwrite);
+            }
             
             // Remove old registration and add new one
             _storableRegistry.TryRemove(sourceFileId, out _);
