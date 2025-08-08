@@ -49,7 +49,7 @@ public static partial class StorageWriteTools
     }
 
     [McpServerTool, Description("Creates a new file in the specified parent folder by ID or path.")]
-    public static async Task<object> CreateFile(string parentFolderId, string fileName, bool asArchive = false, bool overwrite = false)
+    public static async Task<object> CreateFile(string parentFolderId, string fileName, bool overwrite = false)
     {
         try
         {
@@ -59,24 +59,27 @@ public static partial class StorageWriteTools
                 throw new McpException($"Modifiable folder with ID '{parentFolderId}' not found or not modifiable", McpErrorCode.InvalidParams);
 
             IFile? newFile = null;
-            ArchiveType archiveType = ArchiveType.Zip;
+            ArchiveType? archiveType = null;
 
+            // Automatically detect if this should be an archive based on file extension
             bool looksLikeArchive = ArchiveSupport.IsSupportedArchiveExtension(fileName);
-            if (asArchive)
+            if (looksLikeArchive)
             {
-                if (!looksLikeArchive)
-                    throw new McpException($"File name '{fileName}' does not have a supported archive extension.", McpErrorCode.InvalidParams);
+                // Use centralized logic to determine archive type for creation
+                var archiveTypeForCreation = ArchiveSupport.GetArchiveTypeForCreation(fileName);
+                if (archiveTypeForCreation == null)
+                {
+                    var readOnlyFormats = string.Join(", ", ArchiveSupport.GetReadOnlyArchiveExtensions());
+                    var writableFormats = string.Join(", ", ArchiveSupport.GetWritableArchiveExtensions());
+                    throw new McpException($"Archive creation not supported for '{fileName}'. " +
+                                         $"Read-only formats: {readOnlyFormats}. " +
+                                         $"Writable formats: {writableFormats}.", McpErrorCode.InvalidParams);
+                }
 
-                // Map extension to archive type (limited support)
-                if (fileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
-                    archiveType = ArchiveType.Zip;
-                else if (fileName.EndsWith(".tar", StringComparison.OrdinalIgnoreCase))
-                    archiveType = ArchiveType.Tar;
-                else
-                    throw new McpException($"Archive creation currently supports only .zip and .tar. Requested: '{fileName}'", McpErrorCode.InvalidParams);
+                archiveType = archiveTypeForCreation.Value;
 
                 // Use helper to create empty archive file
-                _ = await ArchiveSupport.CreateArchiveAsync(modifiableFolder, fileName, archiveType, CancellationToken.None);
+                _ = await ArchiveSupport.CreateArchiveAsync(modifiableFolder, fileName, archiveType.Value, CancellationToken.None);
                 var created = await modifiableFolder.GetFirstByNameAsync(fileName);
                 if (created is not IFile createdFile)
                     throw new McpException($"Archive file '{fileName}' was not created as expected.", McpErrorCode.InternalError);
@@ -95,8 +98,8 @@ public static partial class StorageWriteTools
                 id = newFileId,
                 name = newFile.Name,
                 type = "file",
-                isArchive = asArchive,
-                archiveType = asArchive ? archiveType.ToString() : null
+                isArchive = looksLikeArchive && archiveType.HasValue,
+                archiveType = archiveType?.ToString()
             };
         }
         catch (McpException)

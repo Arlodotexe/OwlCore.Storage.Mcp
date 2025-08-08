@@ -17,7 +17,8 @@ public static class ProtocolRegistry
 {
     private static readonly ConcurrentDictionary<string, IProtocolHandler> _protocolHandlers = new();
     private static readonly ConcurrentDictionary<string, MountedFolderProtocolHandler> _mountedFolders = new();
-    private static MountSettings? _mountSettings;
+    private static readonly ConcurrentDictionary<string, string> _mountedOriginalIds = new(); // originalId -> protocolScheme
+    private static MountSettings _mountSettings = null!; // Initialized in EnsureInitializedAsync
     
     static ProtocolRegistry()
     {
@@ -39,7 +40,7 @@ public static class ProtocolRegistry
     /// </summary>
     public static async Task EnsureInitializedAsync()
     {
-        if (_mountSettings != null) return; // Already initialized
+        if (_mountSettings != null!) return; // Already initialized
         
         await InitializeSettingsAndRestoreMountsAsync();
     }
@@ -243,7 +244,14 @@ public static class ProtocolRegistry
         {
             // Archive origin only; presented as folder implicitly (read/write if possible)
             mountType = StorableType.File;
+            var resolvedOriginal = originalId ?? (storable is IStorableChild scFile ? scFile.Id : storable.Id);
+
+            // Enforce single mount per underlying archive
+            if (_mountedOriginalIds.TryGetValue(resolvedOriginal, out var existingScheme))
+                throw new ArgumentException($"Archive already mounted as '{existingScheme}://'. Multi-mount disabled.");
+
             folderToMount = WrapArchiveFileAsync(file, CancellationToken.None).GetAwaiter().GetResult();
+            // Track original for later, provisional until success
         }
         else
             throw new ArgumentException("Storable must be a folder or supported archive file.", nameof(storable));
@@ -253,11 +261,15 @@ public static class ProtocolRegistry
         _protocolHandlers[protocolScheme] = handler;
         _mountedFolders[protocolScheme] = handler;
 
-        if (_mountSettings != null)
-        {
-            var idToStore = originalId ?? (storable is IStorableChild sc ? sc.Id : storable.Id);
-            _mountSettings.AddOrUpdateMount(protocolScheme, idToStore, mountName, mountType);
-        }
+        // Ensure the root alias is registered so callers can start navigation at protocol root.
+        // This preserves internal IDs (e.g., archive root name/hash) while keeping alias substitution at API interface/implementation boundaries.
+        StorageTools._storableRegistry[rootUri] = folderToMount;
+
+        var idToStore = originalId ?? (storable is IStorableChild sc ? sc.Id : storable.Id);
+        _mountSettings.AddOrUpdateMount(protocolScheme, idToStore, mountName, mountType);
+        
+        if (mountType == StorableType.File)
+            _mountedOriginalIds[idToStore] = protocolScheme;
         return rootUri;
     }
 
@@ -355,16 +367,30 @@ public static class ProtocolRegistry
     {
         if (string.IsNullOrWhiteSpace(protocolScheme))
             return false;
-
-        // Only allow unmounting of mounted folders, not built-in protocols
         if (!_mountedFolders.ContainsKey(protocolScheme))
             return false;
+
+        // Dispose mounted folder if it supports IDisposable to release any open handles
+        if (_mountedFolders.TryGetValue(protocolScheme, out var mountedHandler))
+        {
+            try
+            {
+                if (mountedHandler.MountedFolder is IDisposable d)
+                    d.Dispose();
+            }
+            catch { /* swallow dispose exceptions */ }
+        }
+
+        // Remove originalId tracking
+        var toRemove = _mountedOriginalIds.Where(kvp => kvp.Value == protocolScheme).Select(kvp => kvp.Key).ToList();
+        foreach (var key in toRemove)
+            _mountedOriginalIds.TryRemove(key, out _);
 
         _protocolHandlers.TryRemove(protocolScheme, out _);
         _mountedFolders.TryRemove(protocolScheme, out _);
         
         // Remove from persistent settings
-        _mountSettings?.RemoveMount(protocolScheme);
+        _mountSettings.RemoveMount(protocolScheme);
         
         return true;
     }
@@ -412,10 +438,8 @@ public static class ProtocolRegistry
     internal static bool TryGetArchiveMountScheme(string originalId, out string? protocolScheme)
     {
         protocolScheme = null;
-        if (string.IsNullOrWhiteSpace(originalId) || _mountSettings is null)
+        if (string.IsNullOrWhiteSpace(originalId))
             return false;
-
-        // Scan mount configurations for a mounted archive (MountType.File) whose original matches.
         foreach (var cfg in _mountSettings.Mounts.Values)
         {
             if (cfg.MountType != StorableType.File)
@@ -433,9 +457,9 @@ public static class ProtocolRegistry
     /// <summary>
     /// Gets the mount settings instance for external saving operations
     /// </summary>
-    internal static MountSettings? GetMountSettings()
+    internal static MountSettings GetMountSettings()
     {
-        return _mountSettings;
+        return _mountSettings; // Non-null after initialization
     }
 
     /// <summary>
@@ -499,7 +523,7 @@ public static class ProtocolRegistry
         }
 
         // Update persistent settings
-        _mountSettings?.RenameMount(currentProtocolScheme, newProtocolScheme, newMountName);
+        _mountSettings.RenameMount(currentProtocolScheme, newProtocolScheme, newMountName);
 
         return newRootUri;
     }
@@ -612,28 +636,44 @@ public static class ProtocolRegistry
         {
             try
             {
-                var parent = await child.GetParentAsync();
+                var parent = await child.GetParentAsync(cancellationToken);
                 parentModifiable = parent is IModifiableFolder;
-            }
-            catch { /* ignore, fallback to read-only */ }
-        }
-
-        if (parentModifiable)
-        {
-            try
-            {
-                // Open read/write stream and wrap in ArchiveFolder for potential modifications
-                var rwStream = await archiveFile.OpenReadWriteAsync(cancellationToken);
-                var archive = ArchiveFactory.Open(rwStream); // archive owns stream
-                return new ArchiveFolder(archive, archiveFile.Name, archiveFile.Name);
             }
             catch
             {
-                // Fallback to read-only wrapper if anything fails
-                return new ReadOnlyArchiveFolder(archiveFile);
+                // ignore, fallback to read-only
             }
         }
 
+        // For writable archives, prefer the stream-based approach with ArchiveFolder.
+        // Only attempt this probe for formats we actually support writing to.
+        if (parentModifiable && ArchiveSupport.IsWritableArchiveExtension(archiveFile.Name))
+        {
+            Stream? stream = null;
+            try
+            {
+                stream = await archiveFile.OpenReadWriteAsync(cancellationToken);
+                var archive = ArchiveFactory.Open(stream); // archive owns stream
+
+                if (archive is IWritableArchive writableArchive)
+                {
+                    // Ownership transfers to ArchiveFolder which will dispose archive (and underlying stream)
+                    stream = null; // prevent local disposal
+                    return new ArchiveFolder(writableArchive, archiveFile.Name, archiveFile.Name);
+                }
+
+                // Not writable: dispose archive to release stream, fall through to read-only
+                archive.Dispose();
+            }
+            catch
+            {
+                // If we never created an archive, ensure the stream is closed
+                try { stream?.Dispose(); } catch { }
+            }
+        }
+
+        // For read-only archives, use file-based constructor to avoid persistent locks.
+        // This opens on demand and allows proper disposal during unmount.
         return new ReadOnlyArchiveFolder(archiveFile);
     }
 }
