@@ -132,19 +132,32 @@ public static class StorageTools
                 throw new InvalidOperationException($"Unknown protocol scheme '{scheme}' in ID '{registrationId}'. Known protocols: {string.Join(", ", knownProtocols)}. Use GetAvailableDrives() to see available starting points.");
             }
 
-            // CRITICAL: If this is not a root URI (has a path), and we don't have it registered,
-            // it means the user is trying to use an ID they haven't navigated to yet.
-            // This will cause stalling because we can't register items we haven't seen.
+            // CRITICAL: For protocols without browseable roots (like HTTP, IPFS, IPNS), 
+            // direct resource access should be allowed. Only filesystem-like protocols 
+            // should require navigation from roots.
             if (!string.IsNullOrEmpty(pathPart))
             {
-                var rootUri = $"{scheme}://";
-                var availableRoots = _storableRegistry.Keys.Where(k => k.EndsWith("://")).ToList();
+                var handler = ProtocolRegistry.GetProtocolHandler(registrationId);
+                if (handler == null)
+                {
+                    throw new InvalidOperationException($"No protocol handler found for '{scheme}'. Use GetAvailableDrives() to see available protocols.");
+                }
+
+                // If the protocol has browseable roots, it's a filesystem-like protocol that requires navigation
+                if (handler.HasBrowsableRoot)
+                {
+                    var rootUri = $"{scheme}://";
+                    var availableRoots = _storableRegistry.Keys.Where(k => k.EndsWith("://")).ToList();
+                    
+                    throw new InvalidOperationException(
+                        $"Cannot directly access '{registrationId}' - this ID exists but hasn't been seen at runtime yet. " +
+                        $"Navigation can only start from already-loaded items. " +
+                        $"Start from root '{rootUri}' and navigate to this path using GetItemByRelativePath('{rootUri}', '{pathPart}'). " +
+                        $"Available roots: {string.Join(", ", availableRoots)}");
+                }
                 
-                throw new InvalidOperationException(
-                    $"Cannot directly access '{registrationId}' - this ID exists but hasn't been seen at runtime yet. " +
-                    $"Navigation can only start from already-loaded items. " +
-                    $"Start from root '{rootUri}' and navigate to this path using GetItemByRelativePath('{rootUri}', '{pathPart}'). " +
-                    $"Available roots: {string.Join(", ", availableRoots)}");
+                // For protocols without browseable roots (direct resource protocols), 
+                // continue to the CreateResourceAsync logic below
             }
 
             var protocolHandler = ProtocolRegistry.GetProtocolHandler(registrationId);

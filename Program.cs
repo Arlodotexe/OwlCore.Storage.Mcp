@@ -73,7 +73,7 @@ public static class CalculatorTool
 public static class FileLauncherTool
 {
     [McpServerTool, Description("Starts/launches a file with the system's default application. Supports protocol aliases (e.g., myproject://file.txt, mfs://document.pdf).")]
-    public static string StartFile(string filePath)
+    public static string StartFile(string filePath, string verb = "open")
     {
         try
         {
@@ -96,7 +96,10 @@ public static class FileLauncherTool
             var processStartInfo = new ProcessStartInfo
             {
                 FileName = resolvedPath,
-                UseShellExecute = true
+                UseShellExecute = true,
+                CreateNoWindow = true,
+                // Allow callers to specify a Shell verb (e.g., "print", "edit").
+                Verb = verb ?? "open",
             };
 
             var process = Process.Start(processStartInfo);
