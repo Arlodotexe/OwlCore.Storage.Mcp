@@ -1,6 +1,12 @@
 using OwlCore.Storage.System.IO;
 using OwlCore.Storage;
 using System.Collections.Concurrent;
+using System;
+using System.IO;
+using System.Linq;
+using System.Collections.Generic;
+using OwlCore.Storage.SharpCompress;
+using SharpCompress.Archives;
 
 namespace OwlCore.Storage.Mcp;
 
@@ -56,59 +62,62 @@ public static class ProtocolRegistry
             // Initialize mount settings
             _mountSettings = new MountSettings(settingsFolder);
             await _mountSettings.LoadAsync();
+            _mountSettings.MigrateLegacyOriginalId();
 
             // Restore mounts in dependency order
             var mountsToRestore = _mountSettings.GetMountsInDependencyOrder();
             var restoredCount = 0;
-            var failedMounts = new List<string>();
+            var failed = new List<string>();
 
             Console.WriteLine($"Found {mountsToRestore.Count} persisted mounts to restore from {mcpSettingsPath}");
 
-            foreach (var mountConfig in mountsToRestore)
+            foreach (var cfg in mountsToRestore)
             {
                 try
                 {
-                    // Try to get the original folder
-                    if (await TryRegisterStorableAsync(mountConfig.OriginalFolderId))
+                    var originalId = MountSettings.ResolveOriginalId(cfg);
+                    if (!await TryRegisterStorableAsync(originalId))
                     {
-                        if (StorageTools._storableRegistry.TryGetValue(mountConfig.OriginalFolderId, out var registeredItem) && 
-                            registeredItem is IFolder folder)
-                        {
-                            // Restore the mount without persisting again
-                            var handler = new MountedFolderProtocolHandler(folder, mountConfig.MountName, mountConfig.ProtocolScheme);
-                            
-                            _protocolHandlers[mountConfig.ProtocolScheme] = handler;
-                            _mountedFolders[mountConfig.ProtocolScheme] = handler;
-                            
-                            // CRITICAL: Register the mounted root in the storage registry BEFORE continuing
-                            // This ensures dependent mounts can find the protocol when they try to register
-                            var rootUri = $"{mountConfig.ProtocolScheme}://";
-                            StorageTools._storableRegistry[rootUri] = folder;
-                            
-                            restoredCount++;
-                            Console.WriteLine($"Restored mount: {mountConfig.ProtocolScheme}:// -> {mountConfig.OriginalFolderId}");
-                        }
-                        else
-                        {
-                            failedMounts.Add($"{mountConfig.ProtocolScheme} (not a folder)");
-                        }
+                        failed.Add($"{cfg.ProtocolScheme} (not accessible)");
+                        continue;
                     }
-                    else
+
+                    if (!StorageTools._storableRegistry.TryGetValue(originalId, out var storable))
                     {
-                        failedMounts.Add($"{mountConfig.ProtocolScheme} (folder not accessible)");
+                        failed.Add($"{cfg.ProtocolScheme} (not registered)");
+                        continue;
                     }
+
+                    IFolder? folder = null;
+                    // Archive mounts are stored as File. Detect by flags.
+                    bool isArchiveMount = (cfg.MountType == StorableType.File && storable is IFile);
+                    if (isArchiveMount && storable is IFile archiveFile)
+                        folder = await WrapArchiveFileAsync(archiveFile, CancellationToken.None);
+                    else if (storable is IFolder f)
+                        folder = f;
+
+                    if (folder is null)
+                    {
+                        failed.Add($"{cfg.ProtocolScheme} (type mismatch for mountType {cfg.MountType})");
+                        continue;
+                    }
+
+                    var handler = new MountedFolderProtocolHandler(folder, cfg.MountName, cfg.ProtocolScheme);
+                    _protocolHandlers[cfg.ProtocolScheme] = handler;
+                    _mountedFolders[cfg.ProtocolScheme] = handler;
+                    StorageTools._storableRegistry[$"{cfg.ProtocolScheme}://"] = folder;
+                    restoredCount++;
+                    Console.WriteLine($"Restored mount: {cfg.ProtocolScheme}:// -> {originalId} (MountType: {cfg.MountType})");
                 }
                 catch (Exception ex)
                 {
-                    failedMounts.Add($"{mountConfig.ProtocolScheme} ({ex.Message})");
+                    failed.Add($"{cfg.ProtocolScheme} ({ex.Message})");
                 }
             }
 
-            Console.WriteLine($"Mount restoration complete: {restoredCount} restored, {failedMounts.Count} failed");
-            if (failedMounts.Any())
-            {
-                Console.WriteLine($"Failed mounts: {string.Join(", ", failedMounts)}");
-            }
+            Console.WriteLine($"Mount restoration complete: {restoredCount} restored, {failed.Count} failed");
+            if (failed.Count > 0)
+                Console.WriteLine("Failed mounts: " + string.Join(", ", failed));
         }
         catch (Exception ex)
         {
@@ -119,76 +128,47 @@ public static class ProtocolRegistry
     /// <summary>
     /// Tries to register a storable item if it's not already registered
     /// </summary>
-    private static async Task<bool> TryRegisterStorableAsync(string folderId)
+    private static async Task<bool> TryRegisterStorableAsync(string id)
     {
         try
         {
             // First check if it's already registered
-            if (StorageTools._storableRegistry.ContainsKey(folderId))
-                return true;
+            if (StorageTools._storableRegistry.ContainsKey(id)) return true;
 
             // Avoid circular dependency during initialization - only try filesystem paths directly
-            if (Directory.Exists(folderId))
-            {
-                var folder = new SystemFolder(new DirectoryInfo(folderId));
-                StorageTools._storableRegistry[folderId] = folder;
-                return true;
-            }
-            else if (File.Exists(folderId))
-            {
-                var file = new SystemFile(new FileInfo(folderId));
-                StorageTools._storableRegistry[folderId] = file;
-                return true;
-            }
+            if (Directory.Exists(id)) { StorageTools._storableRegistry[id] = new SystemFolder(new DirectoryInfo(id)); return true; }
+            if (File.Exists(id)) { StorageTools._storableRegistry[id] = new SystemFile(new FileInfo(id)); return true; }
             
             // For protocol-based IDs during initialization, try to resolve them carefully
-            if (folderId.Contains("://"))
+            if (id.Contains("://"))
             {
-                var scheme = ExtractScheme(folderId);
-                if (scheme != null && _protocolHandlers.ContainsKey(scheme))
+                var scheme = ExtractScheme(id);
+                if (scheme != null && _protocolHandlers.TryGetValue(scheme, out var handler))
                 {
-                    var handler = _protocolHandlers[scheme];
-                    
                     // If this is a root URI and the protocol exists, it might be restorable
-                    if (folderId.EndsWith("://"))
+                    if (id.EndsWith("://") && handler.HasBrowsableRoot)
                     {
-                        if (handler?.HasBrowsableRoot == true)
+                        try
                         {
-                            // For protocol roots, try to create them directly during initialization
-                            try
-                            {
-                                var root = await handler.CreateRootAsync(folderId, CancellationToken.None);
-                                if (root != null)
-                                {
-                                    StorageTools._storableRegistry[folderId] = root;
-                                    return true;
-                                }
-                            }
-                            catch
-                            {
-                                // If root creation fails, we'll try again later
-                                return false;
-                            }
+                            var root = await handler.CreateRootAsync(id, CancellationToken.None);
+                            if (root != null) { StorageTools._storableRegistry[id] = root; return true; }
                         }
+                        catch { return false; }
                     }
                     // For mounted folder protocols with paths, try to navigate to them
                     else if (handler is MountedFolderProtocolHandler mountHandler)
                     {
                         try
                         {
-                            var relativePath = folderId.Substring($"{scheme}://".Length);
-                            if (!string.IsNullOrEmpty(relativePath))
+                            var rel = id.Substring(($"{scheme}://").Length);
+                            if (!string.IsNullOrEmpty(rel))
                             {
-                                var targetItem = await mountHandler.MountedFolder.GetItemByRelativePathAsync(relativePath, CancellationToken.None);
-                                StorageTools._storableRegistry[folderId] = targetItem;
+                                var target = await mountHandler.MountedFolder.GetItemByRelativePathAsync(rel, CancellationToken.None);
+                                StorageTools._storableRegistry[id] = target;
                                 return true;
                             }
                         }
-                        catch
-                        {
-                            // If navigation fails, the mount dependency isn't ready yet
-                            return false;
-                        }
+                        catch { return false; }
                     }
                 }
             }
@@ -196,10 +176,7 @@ public static class ProtocolRegistry
             // For all other cases during initialization, we can't resolve them yet
             return false;
         }
-        catch
-        {
-            return false;
-        }
+        catch { return false; }
     }
 
     /// <summary>
@@ -207,42 +184,28 @@ public static class ProtocolRegistry
     /// </summary>
     /// <param name="scheme">The protocol scheme (e.g., "mfs", "s3", etc.)</param>
     /// <param name="handler">The handler implementation</param>
-    public static void RegisterProtocol(string scheme, IProtocolHandler handler)
-    {
-        _protocolHandlers[scheme] = handler;
-    }
+    public static void RegisterProtocol(string scheme, IProtocolHandler handler) => _protocolHandlers[scheme] = handler;
 
     /// <summary>
     /// Gets the protocol handler for a given URI or ID
     /// </summary>
     /// <param name="uri">The URI or ID to parse</param>
     /// <returns>The protocol handler if found, null otherwise</returns>
-    public static IProtocolHandler? GetProtocolHandler(string uri)
-    {
-        var scheme = ExtractScheme(uri);
-        return scheme != null && _protocolHandlers.TryGetValue(scheme, out var handler) ? handler : null;
-    }
+    public static IProtocolHandler? GetProtocolHandler(string uri) { var s = ExtractScheme(uri); return s != null && _protocolHandlers.TryGetValue(s, out var h) ? h : null; }
 
     /// <summary>
     /// Checks if a URI uses a custom protocol
     /// </summary>
     /// <param name="uri">The URI to check</param>
     /// <returns>True if it's a custom protocol, false otherwise</returns>
-    public static bool IsCustomProtocol(string uri)
-    {
-        return GetProtocolHandler(uri) != null;
-    }
+    public static bool IsCustomProtocol(string uri) => GetProtocolHandler(uri) != null;
 
     /// <summary>
     /// Extracts the protocol scheme from a URI
     /// </summary>
     /// <param name="uri">The URI to parse</param>
     /// <returns>The scheme if found, null otherwise</returns>
-    public static string? ExtractScheme(string uri)
-    {
-        var colonIndex = uri.IndexOf("://");
-        return colonIndex > 0 ? uri.Substring(0, colonIndex) : null;
-    }
+    public static string? ExtractScheme(string uri) { var i = uri.IndexOf("://"); return i > 0 ? uri[..i] : null; }
 
     /// <summary>
     /// Creates an item ID for a custom protocol
@@ -250,19 +213,52 @@ public static class ProtocolRegistry
     /// <param name="parentId">The parent item ID</param>
     /// <param name="itemName">The item name</param>
     /// <returns>The constructed item ID</returns>
-    public static string CreateCustomItemId(string parentId, string itemName)
-    {
-        var handler = GetProtocolHandler(parentId);
-        return handler?.CreateItemId(parentId, itemName) ?? $"{parentId}/{itemName}";
-    }
+    public static string CreateCustomItemId(string parentId, string itemName) { var h = GetProtocolHandler(parentId); return h?.CreateItemId(parentId, itemName) ?? $"{parentId}/{itemName}"; }
 
     /// <summary>
     /// Gets all registered protocol schemes
     /// </summary>
     /// <returns>Collection of registered protocol schemes</returns>
-    public static IEnumerable<string> GetRegisteredProtocols()
+    public static IEnumerable<string> GetRegisteredProtocols() => _protocolHandlers.Keys;
+
+    /// <summary>
+    /// Generalized mounting: accepts either an IFolder or supported archive IFile. Replaces MountFolder internally.
+    /// </summary>
+    public static string MountStorable(IStorable storable, string protocolScheme, string mountName, string? originalId = null)
     {
-        return _protocolHandlers.Keys;
+        if (string.IsNullOrWhiteSpace(protocolScheme)) throw new ArgumentException("Protocol scheme cannot be null or empty", nameof(protocolScheme));
+        if (string.IsNullOrWhiteSpace(mountName)) throw new ArgumentException("Mount name cannot be null or empty", nameof(mountName));
+        if (_protocolHandlers.ContainsKey(protocolScheme)) throw new ArgumentException($"Protocol scheme '{protocolScheme}' is already registered", nameof(protocolScheme));
+
+        StorableType mountType;
+        IFolder folderToMount;
+        if (storable is IFolder folder)
+        {
+            mountType = StorableType.Folder;
+            folderToMount = folder;
+            if (folder is IStorableChild child && WouldCreateCycle(child.Id, protocolScheme))
+                throw new ArgumentException($"Mounting '{protocolScheme}' would create a cycle", nameof(protocolScheme));
+        }
+        else if (storable is IFile file && ArchiveSupport.IsSupportedArchiveExtension(file.Name))
+        {
+            // Archive origin only; presented as folder implicitly (read/write if possible)
+            mountType = StorableType.File;
+            folderToMount = WrapArchiveFileAsync(file, CancellationToken.None).GetAwaiter().GetResult();
+        }
+        else
+            throw new ArgumentException("Storable must be a folder or supported archive file.", nameof(storable));
+
+        var handler = new MountedFolderProtocolHandler(folderToMount, mountName, protocolScheme);
+        var rootUri = $"{protocolScheme}://";
+        _protocolHandlers[protocolScheme] = handler;
+        _mountedFolders[protocolScheme] = handler;
+
+        if (_mountSettings != null)
+        {
+            var idToStore = originalId ?? (storable is IStorableChild sc ? sc.Id : storable.Id);
+            _mountSettings.AddOrUpdateMount(protocolScheme, idToStore, mountName, mountType);
+        }
+        return rootUri;
     }
 
     /// <summary>
@@ -275,37 +271,7 @@ public static class ProtocolRegistry
     /// <returns>The root URI for the mounted folder</returns>
     /// <exception cref="ArgumentException">Thrown if the protocol scheme is already registered</exception>
     public static string MountFolder(IFolder folder, string protocolScheme, string mountName, string? originalFolderId = null)
-    {
-        if (string.IsNullOrWhiteSpace(protocolScheme))
-            throw new ArgumentException("Protocol scheme cannot be null or empty", nameof(protocolScheme));
-        
-        if (string.IsNullOrWhiteSpace(mountName))
-            throw new ArgumentException("Mount name cannot be null or empty", nameof(mountName));
-
-        // Ensure protocol scheme doesn't conflict with existing protocols
-        if (_protocolHandlers.ContainsKey(protocolScheme))
-            throw new ArgumentException($"Protocol scheme '{protocolScheme}' is already registered", nameof(protocolScheme));
-
-        // Check for potential cycles before mounting
-        if (folder is IStorableChild childFolder && WouldCreateCycle(childFolder.Id, protocolScheme))
-            throw new ArgumentException($"Mounting '{protocolScheme}' would create a cycle in the mount graph", nameof(protocolScheme));
-
-        var handler = new MountedFolderProtocolHandler(folder, mountName, protocolScheme);
-        var rootUri = $"{protocolScheme}://";
-        
-        _protocolHandlers[protocolScheme] = handler;
-        _mountedFolders[protocolScheme] = handler;
-        
-        // Persist the mount configuration
-        if (_mountSettings != null)
-        {
-            // Use the original folder ID if provided, otherwise fall back to the folder's ID
-            var folderIdToStore = originalFolderId ?? (folder is IStorableChild storableChild ? storableChild.Id : folder.Id);
-            _mountSettings.AddOrUpdateMount(protocolScheme, folderIdToStore, mountName);
-        }
-        
-        return rootUri;
-    }
+        => MountStorable(folder, protocolScheme, mountName, originalFolderId);
 
     /// <summary>
     /// Checks if mounting a folder would create a cycle in the mount dependency graph
@@ -316,43 +282,29 @@ public static class ProtocolRegistry
     private static bool WouldCreateCycle(string sourceFolderId, string targetProtocolScheme)
     {
         var visited = new HashSet<string>();
-        var recursionStack = new HashSet<string>();
+        var stack = new HashSet<string>();
         
-        return HasCycleDfs(sourceFolderId, targetProtocolScheme, visited, recursionStack);
+        return HasCycleDfs(sourceFolderId, targetProtocolScheme, visited, stack);
     }
 
     /// <summary>
     /// Depth-first search to detect cycles in the mount dependency graph
     /// </summary>
-    private static bool HasCycleDfs(string currentId, string targetProtocolScheme, HashSet<string> visited, HashSet<string> recursionStack)
+    private static bool HasCycleDfs(string currentId, string targetProtocolScheme, HashSet<string> visited, HashSet<string> stack)
     {
         // If we're trying to mount something that would point back to the target protocol, that's a cycle
         var targetUri = $"{targetProtocolScheme}://";
-        if (currentId == targetUri)
-            return true;
-
-        if (recursionStack.Contains(currentId))
-            return true;
-
-        if (visited.Contains(currentId))
-            return false;
-
-        visited.Add(currentId);
-        recursionStack.Add(currentId);
+        if (currentId == targetUri) return true;
+        if (stack.Contains(currentId)) return true;
+        if (visited.Contains(currentId)) return false;
+        visited.Add(currentId); stack.Add(currentId);
 
         // Check if current ID is from a mounted protocol
         var scheme = ExtractScheme(currentId);
-        if (scheme != null && _mountedFolders.TryGetValue(scheme, out var handler))
-        {
-            // Get the original folder this mount points to
-            if (handler.MountedFolder is IStorableChild child)
-            {
-                if (HasCycleDfs(child.Id, targetProtocolScheme, visited, recursionStack))
-                    return true;
-            }
-        }
+        if (scheme != null && _mountedFolders.TryGetValue(scheme, out var handler) && handler.MountedFolder is IStorableChild child)
+            if (HasCycleDfs(child.Id, targetProtocolScheme, visited, stack)) return true;
 
-        recursionStack.Remove(currentId);
+        stack.Remove(currentId);
         return false;
     }
 
@@ -423,12 +375,24 @@ public static class ProtocolRegistry
     /// <returns>Array of mounted folder information</returns>
     public static object[] GetMountedFolders()
     {
-        return _mountedFolders.Values.Select(handler => new
+        return _mountedFolders.Values.Select(h =>
         {
-            protocolScheme = handler.ProtocolScheme,
-            mountName = handler.MountName,
-            rootUri = $"{handler.ProtocolScheme}://",
-            folderType = handler.MountedFolder.GetType().Name
+            StorableType mountType = StorableType.Folder;
+            string originalId = string.Empty;
+            if (_mountSettings != null && _mountSettings.Mounts.TryGetValue(h.ProtocolScheme, out var cfg))
+            {
+                mountType = cfg.MountType;
+                originalId = MountSettings.ResolveOriginalId(cfg);
+            }
+            return new
+            {
+                protocolScheme = h.ProtocolScheme,
+                mountName = h.MountName,
+                rootUri = $"{h.ProtocolScheme}://",
+                folderType = h.MountedFolder.GetType().Name,
+                mountType,
+                originalId
+            };
         }).ToArray();
     }
 
@@ -440,6 +404,30 @@ public static class ProtocolRegistry
     public static bool IsMountedFolder(string protocolScheme)
     {
         return _mountedFolders.ContainsKey(protocolScheme);
+    }
+
+    /// <summary>
+    /// Returns true if the provided original ID is the source of a mounted archive (file), with its protocol scheme.
+    /// </summary>
+    internal static bool TryGetArchiveMountScheme(string originalId, out string? protocolScheme)
+    {
+        protocolScheme = null;
+        if (string.IsNullOrWhiteSpace(originalId) || _mountSettings is null)
+            return false;
+
+        // Scan mount configurations for a mounted archive (MountType.File) whose original matches.
+        foreach (var cfg in _mountSettings.Mounts.Values)
+        {
+            if (cfg.MountType != StorableType.File)
+                continue;
+            var storedOriginal = MountSettings.ResolveOriginalId(cfg);
+            if (string.Equals(storedOriginal, originalId, StringComparison.OrdinalIgnoreCase))
+            {
+                protocolScheme = cfg.ProtocolScheme;
+                return true;
+            }
+        }
+        return false;
     }
 
     /// <summary>
@@ -614,5 +602,38 @@ public static class ProtocolRegistry
             throw new InvalidOperationException($"Alias resolution exceeded maximum depth of {maxDepth} for ID: {aliasId}");
 
         return currentId;
+    }
+
+    private static async Task<IFolder> WrapArchiveFileAsync(IFile archiveFile, CancellationToken cancellationToken)
+    {
+        // Default to read-only unless we can verify parent is modifiable
+        bool parentModifiable = false;
+        if (archiveFile is IStorableChild child)
+        {
+            try
+            {
+                var parent = await child.GetParentAsync();
+                parentModifiable = parent is IModifiableFolder;
+            }
+            catch { /* ignore, fallback to read-only */ }
+        }
+
+        if (parentModifiable)
+        {
+            try
+            {
+                // Open read/write stream and wrap in ArchiveFolder for potential modifications
+                var rwStream = await archiveFile.OpenReadWriteAsync(cancellationToken);
+                var archive = ArchiveFactory.Open(rwStream); // archive owns stream
+                return new ArchiveFolder(archive, archiveFile.Name, archiveFile.Name);
+            }
+            catch
+            {
+                // Fallback to read-only wrapper if anything fails
+                return new ReadOnlyArchiveFolder(archiveFile);
+            }
+        }
+
+        return new ReadOnlyArchiveFolder(archiveFile);
     }
 }

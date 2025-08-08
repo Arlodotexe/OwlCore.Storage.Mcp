@@ -297,11 +297,14 @@ public static class StorageTools
     {
         try
         {
-            // Quick validation for obviously invalid IDs
             if (string.IsNullOrWhiteSpace(folderId))
                 throw new McpException("Folder ID cannot be empty", McpErrorCode.InvalidParams);
 
             await EnsureStorableRegistered(folderId);
+
+            // Archive guidance (mirrors GetFolderFiles/GetFolderSubfolders)
+            if (_storableRegistry.TryGetValue(folderId, out var origItem) && origItem is IFile && ProtocolRegistry.TryGetArchiveMountScheme(folderId, out var archiveScheme) && !folderId.EndsWith("://"))
+                throw new McpException($"Archive file '{folderId}' is mounted as '{archiveScheme}://'. Enumerate via '{archiveScheme}://' instead of the physical file path.", McpErrorCode.InvalidParams);
 
             if (!_storableRegistry.TryGetValue(folderId, out var registeredItem) || registeredItem is not IFolder folder)
                 throw new McpException($"Folder with ID '{folderId}' not found", McpErrorCode.InvalidParams);
@@ -311,32 +314,14 @@ public static class StorageTools
             {
                 string itemId = ProtocolRegistry.IsCustomProtocol(folderId) ? CreateCustomItemId(folderId, item.Name) : item.Id;
                 _storableRegistry[itemId] = item;
-                
-                // Use mount alias substitution to present shorter IDs externally
                 string externalId = ProtocolRegistry.SubstituteWithMountAlias(itemId);
-                // Ensure the alias also maps to the same item for external access
                 if (externalId != itemId)
                     _storableRegistry[externalId] = item;
-                
-                items.Add(new
-                {
-                    id = externalId,
-                    name = item.Name,
-                    type = item switch
-                    {
-                        IFile => "file",
-                        IFolder => "folder",
-                        _ => "unknown"
-                    }
-                });
+                items.Add(new { id = externalId, name = item.Name, type = item switch { IFile => "file", IFolder => "folder", _ => "unknown" } });
             }
-
             return items.ToArray();
         }
-        catch (McpException)
-        {
-            throw; // Re-throw MCP exceptions as-is
-        }
+        catch (McpException) { throw; }
         catch (Exception ex)
         {
             throw new McpException($"Failed to get folder items for '{folderId}': {ex.Message}", ex, McpErrorCode.InternalError);
@@ -353,6 +338,10 @@ public static class StorageTools
                 throw new McpException("Folder ID cannot be empty", McpErrorCode.InvalidParams);
 
             await EnsureStorableRegistered(folderId);
+
+            // Archive guidance
+            if (_storableRegistry.TryGetValue(folderId, out var origItem2) && origItem2 is IFile && ProtocolRegistry.TryGetArchiveMountScheme(folderId, out var archiveScheme2) && !folderId.EndsWith("://"))
+                throw new McpException($"Archive file '{folderId}' is mounted as '{archiveScheme2}://'. Enumerate via '{archiveScheme2}://' instead of the physical file path.", McpErrorCode.InvalidParams);
 
             if (!_storableRegistry.TryGetValue(folderId, out var registeredItem) || registeredItem is not IFolder folder)
                 throw new McpException($"Folder with ID '{folderId}' not found", McpErrorCode.InvalidParams);
@@ -399,6 +388,10 @@ public static class StorageTools
                 throw new McpException("Folder ID cannot be empty", McpErrorCode.InvalidParams);
 
             await EnsureStorableRegistered(folderId);
+
+            // Archive guidance
+            if (_storableRegistry.TryGetValue(folderId, out var origItem3) && origItem3 is IFile && ProtocolRegistry.TryGetArchiveMountScheme(folderId, out var archiveScheme3) && !folderId.EndsWith("://"))
+                throw new McpException($"Archive file '{folderId}' is mounted as '{archiveScheme3}://'. Enumerate via '{archiveScheme3}://' instead of the physical file path.", McpErrorCode.InvalidParams);
 
             if (!_storableRegistry.TryGetValue(folderId, out var registeredItem) || registeredItem is not IFolder folder)
                 throw new McpException($"Folder with ID '{folderId}' not found", McpErrorCode.InvalidParams);
@@ -856,66 +849,59 @@ public static class StorageTools
         return protocols.ToArray();
     }
 
-    [McpServerTool, Description("Mounts an existing folder as a browsable drive with a custom protocol scheme. The folder will appear in GetAvailableDrives() and can be browsed like any other drive.")]
+    [McpServerTool, Description("Mounts an existing folder OR supported archive file as a browsable drive with a custom protocol scheme. The mounted item will appear in GetAvailableDrives() and can be browsed like any other drive.")]
     public static async Task<object> MountFolder(
-        [Description("The ID or path of the folder to mount")] string folderId,
+        [Description("The ID or path of the folder or archive file to mount")] string folderId,
         [Description("The custom protocol scheme to use (e.g., 'myproject', 'backup', 'archive')")] string protocolScheme,
-        [Description("Display name for the mounted folder")] string mountName)
+        [Description("Display name for the mounted item")] string mountName)
     {
         try
         {
             if (string.IsNullOrWhiteSpace(folderId))
-                throw new McpException("Folder ID cannot be null or empty", McpErrorCode.InvalidParams);
-            
+                throw new McpException("ID cannot be null or empty", McpErrorCode.InvalidParams);
             if (string.IsNullOrWhiteSpace(protocolScheme))
                 throw new McpException("Protocol scheme cannot be null or empty", McpErrorCode.InvalidParams);
-            
             if (string.IsNullOrWhiteSpace(mountName))
                 throw new McpException("Mount name cannot be null or empty", McpErrorCode.InvalidParams);
-
-            // Validate protocol scheme format
             if (protocolScheme.Contains("://") || protocolScheme.Contains("/") || protocolScheme.Contains("\\"))
                 throw new McpException("Protocol scheme must be a simple identifier without special characters", McpErrorCode.InvalidParams);
 
-            // Ensure the folder exists and is accessible
             await EnsureStorableRegistered(folderId);
-            
-            if (!_storableRegistry.TryGetValue(folderId, out var registeredItem) || registeredItem is not IFolder folder)
-                throw new McpException($"Folder with ID '{folderId}' not found", McpErrorCode.InvalidParams);
+            if (!_storableRegistry.TryGetValue(folderId, out var registeredItem))
+                throw new McpException($"Item with ID '{folderId}' not found", McpErrorCode.InvalidParams);
 
-            var rootUri = ProtocolRegistry.MountFolder(folder, protocolScheme, mountName, folderId);
-            
-            // Register the mounted root in our storable registry
-            _storableRegistry[rootUri] = folder;
-            
-            // Save the mount settings to persist the configuration
+            if (registeredItem is not IFolder && registeredItem is not IFile)
+                throw new McpException("Item must be either a folder or file", McpErrorCode.InvalidParams);
+
+            var rootUri = ProtocolRegistry.MountStorable(registeredItem, protocolScheme, mountName, folderId);
+
+            // Removed explicit registration of rootUri to avoid forcing a specific representation.
+            // Root folder (including archive wrapper) will be created lazily on first access via EnsureStorableRegistered.
+
             var mountSettings = ProtocolRegistry.GetMountSettings();
             if (mountSettings != null)
             {
                 await mountSettings.SaveAsync();
             }
-            
+
             return new
             {
                 success = true,
-                rootUri = rootUri,
-                protocolScheme = protocolScheme,
-                mountName = mountName,
-                originalFolderId = folderId,
+                rootUri,
+                protocolScheme,
+                mountName,
+                originalId = folderId,
                 message = $"Successfully mounted '{mountName}' as {protocolScheme}://"
             };
         }
-        catch (McpException)
-        {
-            throw; // Re-throw MCP exceptions as-is
-        }
+        catch (McpException) { throw; }
         catch (ArgumentException ex)
         {
-            throw new McpException($"Failed to mount folder: {ex.Message}", ex, McpErrorCode.InvalidParams);
+            throw new McpException($"Failed to mount: {ex.Message}", ex, McpErrorCode.InvalidParams);
         }
         catch (Exception ex)
         {
-            throw new McpException($"Failed to mount folder '{folderId}': {ex.Message}", ex, McpErrorCode.InternalError);
+            throw new McpException($"Failed to mount '{folderId}': {ex.Message}", ex, McpErrorCode.InternalError);
         }
     }
 

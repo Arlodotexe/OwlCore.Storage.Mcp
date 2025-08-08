@@ -12,10 +12,17 @@ namespace OwlCore.Storage.Mcp;
 public class MountConfiguration
 {
     public string ProtocolScheme { get; set; } = string.Empty;
+    
+    [Obsolete("Use OriginalStorableId")] 
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public string OriginalFolderId { get; set; } = string.Empty;
+    public string OriginalStorableId { get; set; } = string.Empty;
     public string MountName { get; set; } = string.Empty;
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public List<string> DependsOn { get; set; } = new();
+
+    // For archive mounts we store StorableType.File (the folder presentation is implicit once mounted).
+    public StorableType MountType { get; set; } = StorableType.Folder;
 }
 
 /// <summary>
@@ -38,27 +45,46 @@ public class MountSettings : SettingsBase
     }
 
     /// <summary>
-    /// Adds or updates a mount configuration
+    /// Adds or updates a mount configuration (generalized for any storable)
     /// </summary>
-    public void AddOrUpdateMount(string protocolScheme, string originalFolderId, string mountName)
+    public void AddOrUpdateMount(string protocolScheme, string originalStorableId, string mountName, StorableType mountType)
     {
         var dependsOn = new List<string>();
-        var scheme = ProtocolRegistry.ExtractScheme(originalFolderId);
+        var scheme = ProtocolRegistry.ExtractScheme(originalStorableId);
         if (scheme != null && ProtocolRegistry.IsMountedFolder(scheme))
-        {
             dependsOn.Add(scheme);
-        }
 
         var mounts = Mounts;
         mounts[protocolScheme] = new MountConfiguration
         {
             ProtocolScheme = protocolScheme,
-            OriginalFolderId = originalFolderId,
+            // Do not populate deprecated OriginalFolderId anymore (kept for legacy reads)
+            OriginalFolderId = string.Empty,
+            OriginalStorableId = originalStorableId,
             MountName = mountName,
             CreatedAt = DateTime.UtcNow,
-            DependsOn = dependsOn
+            DependsOn = dependsOn,
+            MountType = mountType,
         };
-        Mounts = mounts; // This triggers the setter and saves
+        Mounts = mounts; // persist
+    }
+
+    internal void MigrateLegacyOriginalId()
+    {
+        var mounts = Mounts;
+        var changed = false;
+        foreach (var kvp in mounts)
+        {
+            var cfg = kvp.Value;
+            if (string.IsNullOrEmpty(cfg.OriginalStorableId) && !string.IsNullOrEmpty(cfg.OriginalFolderId))
+            {
+                cfg.OriginalStorableId = cfg.OriginalFolderId;
+                cfg.OriginalFolderId = string.Empty; // clear deprecated field
+                changed = true;
+            }
+        }
+        if (changed)
+            Mounts = mounts; // triggers save
     }
 
     /// <summary>
@@ -69,7 +95,7 @@ public class MountSettings : SettingsBase
         var mounts = Mounts;
         if (mounts.Remove(protocolScheme))
         {
-            Mounts = mounts; // This triggers the setter and saves
+            Mounts = mounts; // persist
         }
     }
 
@@ -86,14 +112,13 @@ public class MountSettings : SettingsBase
 
             if (finalProtocolScheme != currentProtocolScheme)
             {
-                // Remove old entry and add new one
                 mounts.Remove(currentProtocolScheme);
                 config.ProtocolScheme = finalProtocolScheme;
             }
 
             config.MountName = finalMountName;
             mounts[finalProtocolScheme] = config;
-            Mounts = mounts; // This triggers the setter and saves
+            Mounts = mounts;
         }
     }
 
@@ -113,7 +138,6 @@ public class MountSettings : SettingsBase
             {
                 if (VisitMount(mount.ProtocolScheme, visited, recursionStack, result, mounts))
                 {
-                    // Cycle detected, add in creation order
                     foreach (var remaining in mounts.Values.Where(m => !visited.Contains(m.ProtocolScheme)))
                     {
                         result.Add(remaining);
@@ -131,26 +155,23 @@ public class MountSettings : SettingsBase
                            List<MountConfiguration> result, Dictionary<string, MountConfiguration> mounts)
     {
         if (recursionStack.Contains(protocolScheme))
-            return true; // Cycle detected
-
+            return true;
         if (visited.Contains(protocolScheme))
-            return false; // Already processed
-
+            return false;
         if (!mounts.TryGetValue(protocolScheme, out var config))
-            return false; // Mount doesn't exist
-
+            return false;
         visited.Add(protocolScheme);
         recursionStack.Add(protocolScheme);
-
-        // Visit dependencies first
         foreach (var dependency in config.DependsOn)
         {
             if (VisitMount(dependency, visited, recursionStack, result, mounts))
-                return true; // Cycle detected
+                return true;
         }
-
         recursionStack.Remove(protocolScheme);
         result.Add(config);
         return false;
     }
+
+    internal static string ResolveOriginalId(MountConfiguration config)
+        => string.IsNullOrEmpty(config.OriginalStorableId) ? config.OriginalFolderId : config.OriginalStorableId;
 }
