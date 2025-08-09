@@ -5,8 +5,12 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
+using OwlCore.ComponentModel;
 using OwlCore.Storage.SharpCompress;
 using SharpCompress.Archives;
+using OwlCore.Diagnostics;
 
 namespace OwlCore.Storage.Mcp;
 
@@ -363,22 +367,38 @@ public static class ProtocolRegistry
     /// </summary>
     /// <param name="protocolScheme">The protocol scheme to unmount</param>
     /// <returns>True if the folder was unmounted, false if it wasn't found or wasn't a mounted folder</returns>
-    public static bool UnmountFolder(string protocolScheme)
+    public static async Task<bool> UnmountFolder(string protocolScheme)
     {
         if (string.IsNullOrWhiteSpace(protocolScheme))
             return false;
         if (!_mountedFolders.ContainsKey(protocolScheme))
             return false;
 
-        // Dispose mounted folder if it supports IDisposable to release any open handles
+        // Flush and dispose mounted folder to ensure changes are saved before disposal
         if (_mountedFolders.TryGetValue(protocolScheme, out var mountedHandler))
         {
             try
             {
+                // First, flush any pending changes if the folder supports it
+                if (mountedHandler.MountedFolder is IFlushable flushable)
+                {
+                    Console.WriteLine($"Flushing changes for mounted folder {protocolScheme}");
+                    await flushable.FlushAsync(CancellationToken.None);
+                    Console.WriteLine($"Successfully flushed changes for {protocolScheme}");
+                }
+                
+                // Then dispose to release handles
                 if (mountedHandler.MountedFolder is IDisposable d)
+                {
+                    Console.WriteLine($"Disposing mounted folder for {protocolScheme}");
                     d.Dispose();
+                    Console.WriteLine($"Successfully disposed mounted folder for {protocolScheme}");
+                }
             }
-            catch { /* swallow dispose exceptions */ }
+            catch (Exception ex) 
+            { 
+                Console.WriteLine($"Error flushing/disposing mounted folder for {protocolScheme}: {ex.Message}");
+            }
         }
 
         // Remove originalId tracking
@@ -645,35 +665,64 @@ public static class ProtocolRegistry
             }
         }
 
-        // For writable archives, prefer the stream-based approach with ArchiveFolder.
-        // Only attempt this probe for formats we actually support writing to.
+        // For writable archives, use file-based constructor with backing stream for flush support
         if (parentModifiable && ArchiveSupport.IsWritableArchiveExtension(archiveFile.Name))
         {
-            Stream? stream = null;
             try
             {
-                stream = await archiveFile.OpenReadWriteAsync(cancellationToken);
-                var archive = ArchiveFactory.Open(stream); // archive owns stream
-
-                if (archive is IWritableArchive writableArchive)
+                // Create a memory stream for fast archive operations
+                var backingMemoryStream = new MemoryStream();
+                
+                // Create a disposal delegate that will flush to file when disposed
+                var flushToFileDelegate = new DisposableDelegate()
                 {
-                    // Ownership transfers to ArchiveFolder which will dispose archive (and underlying stream)
-                    stream = null; // prevent local disposal
-                    return new ArchiveFolder(writableArchive, archiveFile.Name, archiveFile.Name);
-                }
-
-                // Not writable: dispose archive to release stream, fall through to read-only
-                archive.Dispose();
+                    Inner = () =>
+                    {
+                        try
+                        {
+                            Logger.LogInformation($"DisposalDelegate triggered for archive: {archiveFile.Name}");
+                            Logger.LogInformation($"Backing memory stream position: {backingMemoryStream.Position}, length: {backingMemoryStream.Length}");
+                            
+                            // Open the file and flush the memory stream to it (synchronous)
+                            // TODO: Needs DisposeAsync versions of DisposableDelegate and DelegatedDisposalStream.
+                            using var destinationStream = archiveFile.OpenReadWriteAsync(CancellationToken.None).GetAwaiter().GetResult();
+                            Logger.LogInformation($"Opened destination stream for {archiveFile.Name}, stream length: {destinationStream.Length}");
+                            
+                            destinationStream.Position = 0;
+                            destinationStream.SetLength(0);
+                            Logger.LogInformation("Cleared destination stream");
+                            
+                            backingMemoryStream.Position = 0;
+                            backingMemoryStream.CopyTo(destinationStream);
+                            Logger.LogInformation($"Copied {backingMemoryStream.Length} bytes from backing stream to file");
+                            
+                            destinationStream.Flush();
+                            Logger.LogInformation($"Flushed destination stream for {archiveFile.Name}");
+                        }
+                        catch (Exception ex)
+                        {
+                            Logger.LogError($"Error in disposal delegate for {archiveFile.Name}: {ex.Message}");
+                            throw;
+                        }
+                    }
+                };
+                
+                // Wrap the memory stream with delegated disposal to trigger file flush
+                var backingStreamWithFlush = new DelegatedDisposalStream(backingMemoryStream)
+                {
+                    Inner = flushToFileDelegate
+                };
+                
+                return new ArchiveFolder(archiveFile, backingStreamWithFlush);
             }
             catch
             {
-                // If we never created an archive, ensure the stream is closed
-                try { stream?.Dispose(); } catch { }
+                // If ArchiveFolder construction fails, fall through to read-only
             }
         }
 
-        // For read-only archives, use file-based constructor to avoid persistent locks.
-        // This opens on demand and allows proper disposal during unmount.
+        // For read-only archives, use ReadOnlyArchiveFolder(IFile) constructor
+        // This will be disposed properly on unmount
         return new ReadOnlyArchiveFolder(archiveFile);
     }
 }

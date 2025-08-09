@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using CommunityToolkit.Diagnostics;
 using OwlCore.Storage.SharpCompress;
 using SharpCompress.Archives;
@@ -13,7 +16,7 @@ namespace OwlCore.Storage.Mcp;
 /// <summary>
 /// Centralized archive support helpers (extensions list + detection logic) used for both mounting and archive creation.
 /// </summary>
-internal static class ArchiveSupport
+public static class ArchiveSupport
 {
     private static readonly HashSet<string> _readWriteExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -92,7 +95,7 @@ internal static class ArchiveSupport
         // Check multi-part extensions first (longest match)
         if (fileName.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase) || 
             fileName.EndsWith(".tgz", StringComparison.OrdinalIgnoreCase))
-            return ArchiveType.GZip; // SharpCompress creates tar.gz when using GZip on tar content
+            return ArchiveType.Tar; // Create as TAR, compression will be applied via WriterOptions
         
         // Single extensions - only writable ones
         var extension = Path.GetExtension(fileName).ToLowerInvariant();
@@ -100,7 +103,7 @@ internal static class ArchiveSupport
         {
             ".zip" => ArchiveType.Zip,
             ".tar" => ArchiveType.Tar,
-            ".gz" => ArchiveType.GZip,
+            ".gz" => null, // Pure .gz files are not supported for creation (would need existing content to compress)
             _ => null // Not supported for creation (read-only formats like .rar, .7z, .bz2)
         };
     }
@@ -117,61 +120,17 @@ internal static class ArchiveSupport
     /// <param name="name">The name of the new archive.</param>
     /// <param name="archiveType">The type of archive to create.</param>
     /// <param name="cancellationToken">A token that can be used to cancel the ongoing operation.</param>
-    /// <returns>A task containing the new <see cref="ArchiveFolder"/>.</returns>
-    public static async Task<ArchiveFolder> CreateArchiveAsync(IModifiableFolder parentFolder, string name,
+    /// <returns>A task containing the created archive file.</returns>
+    public static async Task<IFile> CreateArchiveAsync(IModifiableFolder parentFolder, string name,
         ArchiveType archiveType, CancellationToken cancellationToken)
     {
+        // Create the archive file directly and use ArchiveFolder's FlushToAsync method
         var archiveFile = await parentFolder.CreateFileAsync(name, overwrite: true, cancellationToken);
-        
-        // Create and save an empty archive structure
-        using (var archive = ArchiveFactory.Create(archiveType))
-        {
-            await FlushToAsync(archiveFile, archive, cancellationToken);
-        }
+        var archive = ArchiveFactory.Create(archiveType);
 
-        // Re-open with a read/write stream so we get an IWritableArchive instance.
-        // (Using the IFile constructor would later reopen as read-only stream and lose write capability.)
-        try
-        {
-            var rwStream = await archiveFile.OpenReadWriteAsync(cancellationToken);
-            var reopened = ArchiveFactory.Open(rwStream);
-            if (reopened is IWritableArchive writable)
-            {
-                return new ArchiveFolder(writable, archiveFile.Name, archiveFile.Name);
-            }
-            // Fallback: this should not happen for writable formats we create.
-            throw new IOException($"Archive type '{archiveType}' did not reopen as writable.");
-        }
-        catch (Exception ex)
-        {
-            throw new IOException($"Failed to initialize writable archive folder for '{name}': {ex.Message}", ex);
-        }
-    }
-    
-    /// <summary>
-    /// Writes an archive to the supplied file.
-    /// </summary>
-    /// <param name="archiveFile">The file to save the archive to.</param>
-    /// <param name="archive">The archive to save.</param>
-    /// <param name="cancellationToken">A token that can be used to cancel the ongoing operation.</param>
-    public static async Task FlushToAsync(IFile archiveFile, IWritableArchive archive, CancellationToken cancellationToken)
-    {
-        using var archiveFileStream = await archiveFile.OpenReadWriteAsync(cancellationToken);
-        Guard.IsEqualTo(archiveFileStream.Position, 0);
-        
-        // Determine appropriate compression type based on archive type
-        var compressionType = archive.Type switch
-        {
-            ArchiveType.Zip => CompressionType.Deflate,
-            ArchiveType.Tar => CompressionType.None, // Tar itself doesn't compress
-            ArchiveType.GZip => CompressionType.GZip,
-            _ => CompressionType.None // Default fallback
-        };
-        
-        // Save the archive to the stream with appropriate compression
-        archive.SaveTo(archiveFileStream, new WriterOptions(compressionType));
-        
-        // Ensure the data is actually written to the underlying storage
-        await archiveFileStream.FlushAsync(cancellationToken);
+        await OwlCore.Storage.SharpCompress.ArchiveFolder.FlushToAsync(archiveFile, archive, cancellationToken);
+
+        // Return just the file - mounting will handle creating ArchiveFolder instances as needed
+        return archiveFile;
     }
 }

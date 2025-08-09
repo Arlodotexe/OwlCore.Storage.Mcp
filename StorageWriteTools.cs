@@ -79,10 +79,7 @@ public static partial class StorageWriteTools
                 archiveType = archiveTypeForCreation.Value;
 
                 // Use helper to create empty archive file
-                _ = await ArchiveSupport.CreateArchiveAsync(modifiableFolder, fileName, archiveType.Value, CancellationToken.None);
-                var created = await modifiableFolder.GetFirstByNameAsync(fileName);
-                if (created is not IFile createdFile)
-                    throw new McpException($"Archive file '{fileName}' was not created as expected.", McpErrorCode.InternalError);
+                var createdFile = await ArchiveSupport.CreateArchiveAsync(modifiableFolder, fileName, archiveType.Value, CancellationToken.None);
                 newFile = createdFile;
             }
             else

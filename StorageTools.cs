@@ -914,7 +914,7 @@ public static class StorageTools
             if (string.IsNullOrWhiteSpace(protocolScheme))
                 throw new McpException("Protocol scheme cannot be null or empty", McpErrorCode.InvalidParams);
 
-            var wasUnmounted = ProtocolRegistry.UnmountFolder(protocolScheme);
+            var wasUnmounted = await ProtocolRegistry.UnmountFolder(protocolScheme);
             
             if (wasUnmounted)
             {
