@@ -95,7 +95,6 @@ public static partial class StorageWriteTools
                 id = newFileId,
                 name = newFile.Name,
                 type = "file",
-                isArchive = looksLikeArchive && archiveType.HasValue,
                 archiveType = archiveType?.ToString()
             };
         }

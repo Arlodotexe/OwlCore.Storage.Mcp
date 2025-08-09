@@ -17,6 +17,19 @@ public static class StorageTools
     private static volatile bool _isInitialized = false;
     private static readonly SemaphoreSlim _initializationSemaphore = new(1, 1);
     
+    // Issue003: inbound canonicalization for browsable protocols only (filesystem-like); resource protocols keep original form.
+    private static string NormalizeInboundExternalId(string id)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return id;
+        var sep = id.IndexOf("://", StringComparison.Ordinal);
+        if (sep <= 0) return id; // not a scheme-form ID
+        var scheme = id.Substring(0, sep);
+        var handler = ProtocolRegistry.GetProtocolHandler($"{scheme}://");
+        if (handler?.HasBrowsableRoot == true)
+            return StoragePathNormalizer.NormalizeExternalId(id);
+        return id; // leave non-browsable protocols unchanged (trailing slash may be semantic)
+    }
+    
     static StorageTools()
     {
         // Don't do async work in static constructor - just ensure basic setup
@@ -72,6 +85,20 @@ public static class StorageTools
     {
         // Ensure the storage system is fully initialized first
         await EnsureInitializedAsync();
+
+    // Issue003: early canonicalization (memory://foo/ -> memory://foo, preserving roots) for identity + symmetric errors.
+        var originalId = id;
+        var normalizedId = StoragePathNormalizer.NormalizeExternalId(originalId);
+        if (normalizedId != originalId)
+        {
+            // Fast path: if normalized already registered, just map alias and return.
+            if (_storableRegistry.TryGetValue(normalizedId, out var existing))
+            {
+                _storableRegistry[originalId] = existing; // alias key
+                return;
+            }
+            id = normalizedId; // proceed using normalized id
+        }
         
         // Check if already registered - if so, we're done
         if (_storableRegistry.ContainsKey(id)) 
@@ -297,6 +324,8 @@ public static class StorageTools
     {
         try
         {
+            // Inbound normalization for browsable protocols only (Issue 003 symmetry)
+            folderId = NormalizeInboundExternalId(folderId);
             if (string.IsNullOrWhiteSpace(folderId))
                 throw new McpException("Folder ID cannot be empty", McpErrorCode.InvalidParams);
 
@@ -1015,5 +1044,22 @@ public static class StorageTools
         {
             throw new McpException($"Failed to rename mounted folder '{currentProtocolScheme}': {ex.Message}", ex, McpErrorCode.InternalError);
         }
+    }
+}
+
+// Issue003 helper: trim trailing slashes from scheme-form IDs (except roots) without touching internal (/...) IDs.
+internal static class StoragePathNormalizer
+{
+    internal static string NormalizeExternalId(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return raw;
+        if (raw.StartsWith('/')) return raw; // internal canonical IDs untouched
+        var sep = raw.IndexOf("://", StringComparison.Ordinal);
+        if (sep <= 0) return raw; // not a scheme-form ID
+        if (raw.EndsWith("://", StringComparison.Ordinal)) return raw; // root URI
+        int end = raw.Length - 1;
+        while (end >= 0 && raw[end] == '/') end--; // trim all trailing slashes
+        if (end == raw.Length - 1) return raw; // no trailing slash
+        return raw.Substring(0, end + 1);
     }
 }
