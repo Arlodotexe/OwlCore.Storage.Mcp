@@ -11,6 +11,7 @@ using OwlCore.ComponentModel;
 using OwlCore.Storage.SharpCompress;
 using SharpCompress.Archives;
 using OwlCore.Diagnostics;
+using Ipfs.Http;
 
 namespace OwlCore.Storage.Mcp;
 
@@ -23,19 +24,27 @@ public static class ProtocolRegistry
     private static readonly ConcurrentDictionary<string, MountedFolderProtocolHandler> _mountedFolders = new();
     private static readonly ConcurrentDictionary<string, string> _mountedOriginalIds = new(); // originalId -> protocolScheme
     private static MountSettings _mountSettings = null!; // Initialized in EnsureInitializedAsync
+    private static bool _isInitialized = false;
     
-    static ProtocolRegistry()
+    /// <summary>
+    /// Initializes the protocol registry with IPFS client support
+    /// </summary>
+    public static void Initialize(IpfsClient ipfsClient)
     {
+        if (_isInitialized) return;
+        
         // Register built-in protocol handlers
-        RegisterProtocol("mfs", new IpfsMfsProtocolHandler());
+        RegisterProtocol("mfs", new IpfsMfsProtocolHandler(ipfsClient));
         RegisterProtocol("http", new HttpProtocolHandler());
         RegisterProtocol("https", new HttpProtocolHandler());
-        RegisterProtocol("ipfs", new IpfsProtocolHandler());
-        RegisterProtocol("ipns", new IpnsProtocolHandler());
+        RegisterProtocol("ipfs", new IpfsProtocolHandler(ipfsClient));
+        RegisterProtocol("ipns", new IpnsProtocolHandler(ipfsClient));
         RegisterProtocol("memory", new MemoryProtocolHandler());
         // Add more protocols here as needed
         // RegisterProtocol("azure-blob", new AzureBlobProtocolHandler());
         // RegisterProtocol("s3", new S3ProtocolHandler());
+        
+        _isInitialized = true;
     }
 
     /// <summary>
