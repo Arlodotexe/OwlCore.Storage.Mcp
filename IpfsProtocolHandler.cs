@@ -10,6 +10,13 @@ namespace OwlCore.Storage.Mcp;
 /// </summary>
 public class IpfsProtocolHandler : IProtocolHandler
 {
+    private readonly IpfsClient _client;
+
+    public IpfsProtocolHandler(IpfsClient client)
+    {
+        _client = client;
+    }
+
     public bool HasBrowsableRoot => false; // IPFS doesn't have a single global root, but individual hashes can point to browsable folders
 
     public Task<IStorable?> CreateRootAsync(string rootUri, CancellationToken cancellationToken = default)
@@ -31,12 +38,10 @@ public class IpfsProtocolHandler : IProtocolHandler
                 return null;
             }
 
-            var client = new IpfsClient();
-            
             // Test IPFS client connectivity
             try
             {
-                await client.Generic.IdAsync();
+                await _client.Generic.IdAsync();
                 Console.WriteLine("IPFS client connectivity test passed");
             }
             catch (Exception ex)
@@ -46,7 +51,7 @@ public class IpfsProtocolHandler : IProtocolHandler
             }
 
             // IpfsFolder can represent either a folder or a file - it will determine the type based on the hash
-            var ipfsFolder = new IpfsFolder(hash, client);
+            var ipfsFolder = new IpfsFolder(hash, _client);
             Console.WriteLine($"Successfully created IpfsFolder for hash: {hash}");
             return ipfsFolder;
         }
