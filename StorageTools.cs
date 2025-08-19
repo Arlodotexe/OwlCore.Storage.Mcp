@@ -7,6 +7,7 @@ using OwlCore.Kubo;
 using System.Collections.Concurrent;
 using System.Text;
 using Ipfs.Http;
+using CommunityToolkit.Diagnostics;
 
 namespace OwlCore.Storage.Mcp;
 
@@ -510,7 +511,6 @@ public static class StorageTools
     {
         try
         {
-            // Quick validation for obviously invalid IDs
             if (string.IsNullOrWhiteSpace(startingItemId))
                 throw new McpException("Starting item ID cannot be empty", McpErrorCode.InvalidParams);
 
@@ -518,18 +518,29 @@ public static class StorageTools
 
             if (!_storableRegistry.TryGetValue(startingItemId, out var startingItem))
             {
-                // If the starting item isn't found, provide helpful guidance
                 var availableDrives = await GetAvailableDrives();
                 var driveList = string.Join(", ", availableDrives.Cast<dynamic>().Select(d => $"'{d.id}'"));
                 throw new McpException($"Starting item with ID '{startingItemId}' not found. For new navigation, use drive roots from GetAvailableDrives(): {driveList}", McpErrorCode.InvalidParams);
             }
 
-            var targetItem = await startingItem.GetItemByRelativePathAsync(relativePath, CancellationToken.None);
+            IStorable? lastItem = null;
+
+            // Register each item along the navigation chain during iteration (non-creating traversal)
+            await foreach (var node in startingItem.GetItemsAlongRelativePathAsync(relativePath, CancellationToken.None))
+            {
+                _storableRegistry[node.Id] = node;
+                var aliasId = ProtocolRegistry.SubstituteWithMountAlias(node.Id);
+                if (aliasId != node.Id)
+                    _storableRegistry[aliasId] = node;
+
+                lastItem = node;
+            }
+
+            Guard.IsNotNull(lastItem);
+            var targetItem = lastItem;
             _storableRegistry[targetItem.Id] = targetItem;
 
-            // Use mount alias substitution to present shorter IDs externally
-            string externalId = ProtocolRegistry.SubstituteWithMountAlias(targetItem.Id);
-            // Ensure the alias also maps to the same item for external access
+            var externalId = ProtocolRegistry.SubstituteWithMountAlias(targetItem.Id);
             if (externalId != targetItem.Id)
                 _storableRegistry[externalId] = targetItem;
 
@@ -547,7 +558,7 @@ public static class StorageTools
         }
         catch (McpException)
         {
-            throw; // Re-throw MCP exceptions as-is
+            throw;
         }
         catch (Exception ex)
         {
@@ -555,7 +566,7 @@ public static class StorageTools
         }
     }
 
-    [McpServerTool, Description("Gets the relative path from one folder to another item.")]
+    [McpServerTool, Description("Gets a relative path from a folder to a child item and registers the chain along that path.")]
     public static async Task<string> GetRelativePath(string fromFolderId, string toItemId)
     {
         try
@@ -569,7 +580,20 @@ public static class StorageTools
             if (!_storableRegistry.TryGetValue(toItemId, out var toItem) || toItem is not IStorableChild toChild)
                 throw new McpException($"To item with ID '{toItemId}' not found or not a child item", McpErrorCode.InvalidParams);
 
-            return await fromFolder.GetRelativePathToAsync(toChild);
+            var relative = await fromFolder.GetRelativePathToAsync(toChild, CancellationToken.None);
+
+            IStorable? lastItem = null;
+
+            // Register each visited node along the computed relative path (non-creating traversal)
+            await foreach (var node in fromFolder.GetItemsAlongRelativePathAsync(relative, CancellationToken.None))
+            {
+                _storableRegistry[node.Id] = node;
+                var aliasId = ProtocolRegistry.SubstituteWithMountAlias(node.Id);
+                if (aliasId != node.Id)
+                    _storableRegistry[aliasId] = node;
+            }
+
+            return relative;
         }
         catch (McpException)
         {
