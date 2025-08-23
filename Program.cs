@@ -5,27 +5,111 @@ using ModelContextProtocol.Server;
 using ModelContextProtocol;
 using System.ComponentModel;
 using OwlCore.Storage;
+using OwlCore.Storage.System.IO;
 using OwlCore.Storage.Mcp;
 using System.Text;
 using System.Collections.Concurrent;
 using ModelContextProtocol.Protocol;
 using System.Diagnostics;
+using OwlCore.Diagnostics;
+using OwlCore.Kubo;
+using Ipfs.Http;
+
+var startTime = DateTime.Now;
+
+// Cancellation
+var cancellationTokenSource = new CancellationTokenSource();
+var cancellationToken = cancellationTokenSource.Token;
+
+Console.CancelKeyPress += (sender, eventArgs) =>
+{
+    eventArgs.Cancel = true;
+    cancellationTokenSource.Cancel();
+};
 
 // Ensure proper UTF-8 encoding for console output
 Console.OutputEncoding = Encoding.UTF8;
 Console.InputEncoding = Encoding.UTF8;
 
+// Working data
+var appData = new SystemFolder(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData));
+var owlCoreFolder = (SystemFolder)await appData.CreateFolderAsync("OwlCore", overwrite: false, cancellationToken);
+var storageFolder = (SystemFolder)await owlCoreFolder.CreateFolderAsync("Storage", overwrite: false, cancellationToken);
+var mcpWorkingFolder = (SystemFolder)await storageFolder.CreateFolderAsync("Mcp", overwrite: false, cancellationToken);
+
 var builder = Host.CreateApplicationBuilder(args);
 builder.Logging.AddConsole(consoleLogOptions =>
 {
     // Configure all logs to go to stderr
-    consoleLogOptions.LogToStandardErrorThreshold = LogLevel.Trace;
+    consoleLogOptions.LogToStandardErrorThreshold = Microsoft.Extensions.Logging.LogLevel.Trace;
 });
 
 builder.Services
     .AddMcpServer()
     .WithStdioServerTransport()
     .WithToolsFromAssembly();
+
+// Logging
+var logFile = await mcpWorkingFolder.CreateFileAsync($"OwlCore.Storage.Mcp.{startTime.Ticks}.log", overwrite: false, cancellationToken);
+var logStream = await logFile.OpenWriteAsync(cancellationToken);
+using var logWriter = new StreamWriter(logStream) { AutoFlush = true };
+Logger.MessageReceived += Logger_MessageReceived;
+void Logger_MessageReceived(object? sender, LoggerMessageEventArgs e)
+{
+    if (e.Level == OwlCore.Diagnostics.LogLevel.Trace)
+        return;
+
+    // Set console color based on log level
+    var originalColor = Console.ForegroundColor;
+    switch (e.Level)
+    {
+        case OwlCore.Diagnostics.LogLevel.Warning:
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            break;
+        case OwlCore.Diagnostics.LogLevel.Error:
+        case OwlCore.Diagnostics.LogLevel.Critical:
+            Console.ForegroundColor = ConsoleColor.Red;
+            break;
+    }
+
+    try
+    {
+        var msg = $"+{Math.Round((DateTime.Now - startTime).TotalMilliseconds)}ms {Path.GetFileNameWithoutExtension(e.CallerFilePath)} {e.CallerMemberName}  [{e.Level}] {e.Exception} {e.Message}";
+        logWriter.WriteLine(msg);
+        Console.WriteLine(msg);    
+    }
+    finally
+    {
+        // Always restore the original color
+        Console.ForegroundColor = originalColor;
+    }
+}
+
+/* Custom startup args
+Move closing comment up to enable (fully or partially) 
+var customStartupArgs = "";
+args = customStartupArgs.Split(' ').ToArray();
+*/
+
+AppDomain.CurrentDomain.UnhandledException += (object sender, UnhandledExceptionEventArgs e) => Logger.LogError(e.ExceptionObject?.ToString() ?? "Error message not found", e.ExceptionObject as Exception);
+//AppDomain.CurrentDomain.FirstChanceException += (object? sender, System.Runtime.ExceptionServices.FirstChanceExceptionEventArgs e) => Logger.LogError(e.Exception?.ToString() ?? "Error message not found", e.Exception);
+//TaskScheduler.UnobservedTaskException += (object? sender, UnobservedTaskExceptionEventArgs e) => Logger.LogError(e.Exception?.ToString() ?? "Error message not found", e.Exception);
+
+// Set up KuboBootstrapper and IpfsClient
+Logger.LogInformation(mcpWorkingFolder.Id);
+var kuboRepoPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ipfs");
+var kubo = new KuboBootstrapper(kuboRepoPath, new Version(0, 35, 0))
+{
+    ApiUri = new Uri("http://127.0.0.1:5001"),
+    GatewayUri = new Uri("http://127.0.0.1:8080"),
+    BinaryWorkingFolder = mcpWorkingFolder,
+    LaunchConflictMode = BootstrapLaunchConflictMode.Relaunch,
+};
+
+await kubo.StartAsync();
+
+// Initialize protocol registry with IPFS client
+ProtocolRegistry.Initialize(kubo.Client);
 
 // Initialize storage system and restore mounts before starting the server
 await ProtocolRegistry.EnsureInitializedAsync();

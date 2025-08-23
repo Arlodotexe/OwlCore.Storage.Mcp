@@ -9,12 +9,18 @@ namespace OwlCore.Storage.Mcp;
 /// </summary>
 public class IpfsMfsProtocolHandler : IProtocolHandler
 {
+    private readonly IpfsClient _client;
+
+    public IpfsMfsProtocolHandler(IpfsClient client)
+    {
+        _client = client;
+    }
+
     public bool HasBrowsableRoot => true; // MFS has a browsable root filesystem
 
     public Task<IStorable?> CreateRootAsync(string rootUri, CancellationToken cancellationToken = default)
     {
-        var client = new IpfsClient();
-        return Task.FromResult<IStorable?>(new MfsFolder("/", client));
+        return Task.FromResult<IStorable?>(new MfsFolder("/", _client));
     }
 
     public Task<IStorable?> CreateResourceAsync(string resourceUri, CancellationToken cancellationToken = default)
@@ -32,8 +38,7 @@ public class IpfsMfsProtocolHandler : IProtocolHandler
     {
         try
         {
-            var client = new IpfsClient();
-            var repoStats = await client.Stats.RepositoryAsync(cancellationToken);
+            var repoStats = await _client.Stats.RepositoryAsync(cancellationToken);
             
             return new
             {

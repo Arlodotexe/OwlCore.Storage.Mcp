@@ -49,7 +49,7 @@ public static partial class StorageWriteTools
     }
 
     [McpServerTool, Description("Creates a new file in the specified parent folder by ID or path.")]
-    public static async Task<object> CreateFile(string parentFolderId, string fileName, bool asArchive = false, bool overwrite = false)
+    public static async Task<object> CreateFile(string parentFolderId, string fileName, bool overwrite = false)
     {
         try
         {
@@ -59,27 +59,27 @@ public static partial class StorageWriteTools
                 throw new McpException($"Modifiable folder with ID '{parentFolderId}' not found or not modifiable", McpErrorCode.InvalidParams);
 
             IFile? newFile = null;
-            ArchiveType archiveType = ArchiveType.Zip;
+            ArchiveType? archiveType = null;
 
+            // Automatically detect if this should be an archive based on file extension
             bool looksLikeArchive = ArchiveSupport.IsSupportedArchiveExtension(fileName);
-            if (asArchive)
+            if (looksLikeArchive)
             {
-                if (!looksLikeArchive)
-                    throw new McpException($"File name '{fileName}' does not have a supported archive extension.", McpErrorCode.InvalidParams);
+                // Use centralized logic to determine archive type for creation
+                var archiveTypeForCreation = ArchiveSupport.GetArchiveTypeForCreation(fileName);
+                if (archiveTypeForCreation == null)
+                {
+                    var readOnlyFormats = string.Join(", ", ArchiveSupport.GetReadOnlyArchiveExtensions());
+                    var writableFormats = string.Join(", ", ArchiveSupport.GetWritableArchiveExtensions());
+                    throw new McpException($"Archive creation not supported for '{fileName}'. " +
+                                         $"Read-only formats: {readOnlyFormats}. " +
+                                         $"Writable formats: {writableFormats}.", McpErrorCode.InvalidParams);
+                }
 
-                // Map extension to archive type (limited support)
-                if (fileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
-                    archiveType = ArchiveType.Zip;
-                else if (fileName.EndsWith(".tar", StringComparison.OrdinalIgnoreCase))
-                    archiveType = ArchiveType.Tar;
-                else
-                    throw new McpException($"Archive creation currently supports only .zip and .tar. Requested: '{fileName}'", McpErrorCode.InvalidParams);
+                archiveType = archiveTypeForCreation.Value;
 
                 // Use helper to create empty archive file
-                _ = await ArchiveSupport.CreateArchiveAsync(modifiableFolder, fileName, archiveType, CancellationToken.None);
-                var created = await modifiableFolder.GetFirstByNameAsync(fileName);
-                if (created is not IFile createdFile)
-                    throw new McpException($"Archive file '{fileName}' was not created as expected.", McpErrorCode.InternalError);
+                var createdFile = await ArchiveSupport.CreateArchiveAsync(modifiableFolder, fileName, archiveType.Value, CancellationToken.None);
                 newFile = createdFile;
             }
             else
@@ -95,8 +95,7 @@ public static partial class StorageWriteTools
                 id = newFileId,
                 name = newFile.Name,
                 type = "file",
-                isArchive = asArchive,
-                archiveType = asArchive ? archiveType.ToString() : null
+                archiveType = archiveType?.ToString()
             };
         }
         catch (McpException)
@@ -250,118 +249,36 @@ public static partial class StorageWriteTools
         }
     }
 
-    [McpServerTool, Description("Moves or renames an item from source folder to target folder.")]
-    public static async Task<object> MoveItem(string sourceFolderId, string itemName, string targetParentFolderId, string? newName = null)
+    [McpServerTool, Description("Creates a copy of a file or folder in the specified target folder.")]
+    public static async Task<object> CopyItem(string sourceItemId, string targetParentFolderId, string? newName = null, bool overwrite = false)
     {
         try
         {
-            await StorageTools.EnsureStorableRegistered(sourceFolderId);
+            await StorageTools.EnsureStorableRegistered(sourceItemId);
             await StorageTools.EnsureStorableRegistered(targetParentFolderId);
 
-            if (!_storableRegistry.TryGetValue(sourceFolderId, out var sourceParent) || sourceParent is not IModifiableFolder sourceModifiableFolder)
-                throw new McpException($"Source folder with ID '{sourceFolderId}' not found or not modifiable", McpErrorCode.InvalidParams);
+            if (!_storableRegistry.TryGetValue(sourceItemId, out var sourceItem))
+                throw new McpException($"Source item with ID '{sourceItemId}' not found", McpErrorCode.InvalidParams);
 
             if (!_storableRegistry.TryGetValue(targetParentFolderId, out var targetParent) || targetParent is not IModifiableFolder targetModifiableFolder)
                 throw new McpException($"Target folder with ID '{targetParentFolderId}' not found or not modifiable", McpErrorCode.InvalidParams);
 
-            var item = await sourceModifiableFolder.GetFirstByNameAsync(itemName);
-            if (item is not IStorableChild storableChild)
-                throw new McpException($"Item '{itemName}' not found in source folder or not movable", McpErrorCode.InvalidParams);
-
-            // For moves, prefer using the efficient extension methods when possible
-            IStorable newItem;
-            string finalName = newName ?? item.Name;
-
-            if (item is IChildFile childFile)
+            if (sourceItem is IFile sourceFile)
             {
-                IChildFile movedFile;
-                if (finalName != item.Name)
-                {
-                    // Use the new 4-parameter overload with rename support
-                    movedFile = await targetModifiableFolder.MoveFromAsync(childFile, sourceModifiableFolder, false, finalName);
-                }
-                else
-                {
-                    // Use the existing 3-parameter overload
-                    movedFile = await targetModifiableFolder.MoveFromAsync(childFile, sourceModifiableFolder, false);
-                }
-                newItem = movedFile;
-            }
-            else if (item is IFolder sourceFolder)
-            {
-                var newFolder = await targetModifiableFolder.CreateFolderAsync(finalName);
-                // Note: This is a simple move - for recursive copying, you'd need to implement that logic
-                newItem = newFolder;
-                
-                // Delete the original folder (this will only work if it's empty)
-                await sourceModifiableFolder.DeleteAsync(storableChild);
-            }
-            else
-            {
-                throw new McpException($"Unsupported item type for moving: {item.GetType()}", McpErrorCode.InvalidParams);
-            }
-
-            // Note: For IChildFile moves using MoveFromAsync, the original is already deleted by the extension method
-            // For other types, we manually deleted above
-            
-            // Remove old registration and add new one
-            string oldItemId = ProtocolRegistry.IsCustomProtocol(sourceFolderId) ? StorageTools.CreateCustomItemId(sourceFolderId, itemName) : item.Id;
-            _storableRegistry.TryRemove(oldItemId, out _);
-
-            string newItemId = ProtocolRegistry.IsCustomProtocol(targetParentFolderId) ? StorageTools.CreateCustomItemId(targetParentFolderId, finalName) : newItem.Id;
-            _storableRegistry[newItemId] = newItem;
-
-            return new
-            {
-                id = newItemId,
-                name = newItem.Name,
-                type = newItem switch
-                {
-                    IFile => "file",
-                    IFolder => "folder",
-                    _ => "unknown"
-                }
-            };
-        }
-        catch (McpException)
-        {
-            throw; // Re-throw MCP exceptions as-is
-        }
-        catch (Exception ex)
-        {
-            throw new McpException($"Failed to move item '{itemName}' from '{sourceFolderId}' to '{targetParentFolderId}': {ex.Message}", ex, McpErrorCode.InternalError);
-        }
-    }
-
-    [McpServerTool, Description("Creates a copy of a file in the specified target folder.")]
-    public static async Task<object> CopyFile(string sourceFileId, string targetParentFolderId, string? newName = null, bool overwrite = false)
-    {
-        try
-        {
-            await StorageTools.EnsureStorableRegistered(sourceFileId);
-            await StorageTools.EnsureStorableRegistered(targetParentFolderId);
-
-            if (!_storableRegistry.TryGetValue(sourceFileId, out var sourceItem) || sourceItem is not IFile sourceFile)
-                throw new McpException($"Source file with ID '{sourceFileId}' not found or not a file", McpErrorCode.InvalidParams);
-
-            if (!_storableRegistry.TryGetValue(targetParentFolderId, out var targetParent) || targetParent is not IModifiableFolder targetModifiableFolder)
-                throw new McpException($"Target folder with ID '{targetParentFolderId}' not found or not modifiable", McpErrorCode.InvalidParams);
-
-            try
-            {
+                // File copy logic
                 // Determine the target file name
                 var targetFileName = !string.IsNullOrEmpty(newName) ? newName : sourceFile.Name;
                 
-                // Use the OwlCore.Storage 0.13.0 extension method with rename support
+                // Use the OwlCore.Storage extension method with rename support
                 IChildFile copiedFile;
                 if (!string.IsNullOrEmpty(newName) && newName != sourceFile.Name)
                 {
-                    // Use the new 4-parameter overload with rename support
+                    // Use the 4-parameter overload with rename support
                     copiedFile = await targetModifiableFolder.CreateCopyOfAsync(sourceFile, overwrite, targetFileName);
                 }
                 else
                 {
-                    // Use the existing 3-parameter overload 
+                    // Use the 3-parameter overload 
                     copiedFile = await targetModifiableFolder.CreateCopyOfAsync(sourceFile, overwrite);
                 }
                 
@@ -377,33 +294,37 @@ public static partial class StorageWriteTools
                     type = "file"
                 };
             }
-            catch (Exception)
+            else if (sourceItem is IFolder sourceFolder)
             {
-                // If the efficient method fails, fall back to manual copy
-                
-                // Determine the target file name
-                var targetFileName = !string.IsNullOrEmpty(newName) ? newName : sourceFile.Name;
-                
-                // Read the source file content
-                var fileContent = await sourceFile.ReadBytesAsync(CancellationToken.None);
-                
-                // Create a new file in the target folder
-                var newFile = await targetModifiableFolder.CreateFileAsync(targetFileName, overwrite);
-                
-                // Write the content to the new file
-                await newFile.WriteBytesAsync(fileContent, CancellationToken.None);
-                
-                string newFileId = ProtocolRegistry.IsCustomProtocol(targetParentFolderId) ? 
-                    StorageTools.CreateCustomItemId(targetParentFolderId, newFile.Name) : 
-                    newFile.Id;
-                _storableRegistry[newFileId] = newFile;
+                // Folder copy logic (recursive implementation)
+                var targetFolderName = !string.IsNullOrEmpty(newName) ? newName : sourceFolder.Name;
+                var targetFolder = await targetModifiableFolder.CreateFolderAsync(targetFolderName, overwrite);
+
+                // Recursively copy all files from source folder
+                await foreach (var file in new DepthFirstRecursiveFolder(sourceFolder).GetFilesAsync(CancellationToken.None))
+                {
+                    // Compute full relative path from source root to the file (includes the filename)
+                    var relativePath = await sourceFolder.GetRelativePathToAsync((IStorableChild)file);
+                    // Let CreateRelativeFolderPathAsync ignore the filename and create only parent folders
+                    var destinationFolder = (IModifiableFolder)await targetFolder.CreateFolderByRelativePathAsync(relativePath, overwrite: false, CancellationToken.None);
+                    await destinationFolder.CreateCopyOfAsync(file, overwrite);
+                }
+
+                string newFolderId = ProtocolRegistry.IsCustomProtocol(targetParentFolderId) ? 
+                    StorageTools.CreateCustomItemId(targetParentFolderId, targetFolder.Name) : 
+                    targetFolder.Id;
+                _storableRegistry[newFolderId] = targetFolder;
 
                 return new
                 {
-                    id = newFileId,
-                    name = newFile.Name,
-                    type = "file"
+                    id = newFolderId,
+                    name = targetFolder.Name,
+                    type = "folder"
                 };
+            }
+            else
+            {
+                throw new McpException($"Unsupported item type for copying: {sourceItem.GetType()}", McpErrorCode.InvalidParams);
             }
         }
         catch (McpException)
@@ -412,21 +333,21 @@ public static partial class StorageWriteTools
         }
         catch (Exception ex)
         {
-            throw new McpException($"Failed to copy file from '{sourceFileId}' to '{targetParentFolderId}': {ex.Message}", ex, McpErrorCode.InternalError);
+            throw new McpException($"Failed to copy item from '{sourceItemId}' to '{targetParentFolderId}': {ex.Message}", ex, McpErrorCode.InternalError);
         }
     }
 
-    [McpServerTool, Description("Moves a file from source folder to target folder using efficient move operations.")]
-    public static async Task<object> MoveFile(string sourceFileId, string sourceFolderId, string targetParentFolderId, string? newName = null, bool overwrite = false)
+    [McpServerTool, Description("Moves a file or folder from source folder to target folder using efficient move operations.")]
+    public static async Task<object> MoveItem(string sourceItemId, string sourceFolderId, string targetParentFolderId, string? newName = null, bool overwrite = false)
     {
         try
         {
-            await StorageTools.EnsureStorableRegistered(sourceFileId);
+            await StorageTools.EnsureStorableRegistered(sourceItemId);
             await StorageTools.EnsureStorableRegistered(sourceFolderId);
             await StorageTools.EnsureStorableRegistered(targetParentFolderId);
 
-            if (!_storableRegistry.TryGetValue(sourceFileId, out var sourceItem) || sourceItem is not IChildFile sourceFile)
-                throw new McpException($"Source file with ID '{sourceFileId}' not found or not a child file", McpErrorCode.InvalidParams);
+            if (!_storableRegistry.TryGetValue(sourceItemId, out var sourceItem))
+                throw new McpException($"Source item with ID '{sourceItemId}' not found", McpErrorCode.InvalidParams);
 
             if (!_storableRegistry.TryGetValue(sourceFolderId, out var sourceParent) || sourceParent is not IModifiableFolder sourceModifiableFolder)
                 throw new McpException($"Source folder with ID '{sourceFolderId}' not found or not modifiable", McpErrorCode.InvalidParams);
@@ -434,32 +355,113 @@ public static partial class StorageWriteTools
             if (!_storableRegistry.TryGetValue(targetParentFolderId, out var targetParent) || targetParent is not IModifiableFolder targetModifiableFolder)
                 throw new McpException($"Target folder with ID '{targetParentFolderId}' not found or not modifiable", McpErrorCode.InvalidParams);
 
-            // Use the OwlCore.Storage extension method for efficient moving with rename support (0.13.0)
-            IChildFile movedFile;
-            if (!string.IsNullOrEmpty(newName) && newName != sourceFile.Name)
+            if (sourceItem is IChildFile sourceFile)
             {
-                // Use the new 4-parameter overload with rename support
-                movedFile = await targetModifiableFolder.MoveFromAsync(sourceFile, sourceModifiableFolder, overwrite, newName);
+                // File move logic (existing implementation)
+                IChildFile movedFile;
+                if (!string.IsNullOrEmpty(newName) && newName != sourceFile.Name)
+                {
+                    // Use the new 4-parameter overload with rename support
+                    movedFile = await targetModifiableFolder.MoveFromAsync(sourceFile, sourceModifiableFolder, overwrite, newName);
+                }
+                else
+                {
+                    // Use the existing 3-parameter overload
+                    movedFile = await targetModifiableFolder.MoveFromAsync(sourceFile, sourceModifiableFolder, overwrite);
+                }
+                
+                // Remove old registration and add new one
+                _storableRegistry.TryRemove(sourceItemId, out _);
+
+                string newFileId = ProtocolRegistry.IsCustomProtocol(targetParentFolderId) ? 
+                    StorageTools.CreateCustomItemId(targetParentFolderId, movedFile.Name) : 
+                    movedFile.Id;
+                _storableRegistry[newFileId] = movedFile;
+
+                return new
+                {
+                    id = newFileId,
+                    name = movedFile.Name,
+                    type = "file"
+                };
+            }
+            else if (sourceItem is IFolder sourceFolder && sourceItem is IStorableChild storableChild)
+            {
+                // Folder move logic (copy then delete)
+                var targetFolderName = !string.IsNullOrEmpty(newName) ? newName : sourceFolder.Name;
+                var targetFolder = await targetModifiableFolder.CreateFolderAsync(targetFolderName, overwrite);
+
+                // Recursively copy all files from source folder
+                await foreach (var file in new DepthFirstRecursiveFolder(sourceFolder).GetFilesAsync(CancellationToken.None))
+                {
+                    var relativePath = await sourceFolder.GetRelativePathToAsync((IStorableChild)file);
+                    var destinationFolder = (IModifiableFolder)await targetFolder.CreateFolderByRelativePathAsync(relativePath, overwrite: false, CancellationToken.None);
+                    await destinationFolder.CreateCopyOfAsync(file, overwrite);
+                }
+
+                // Delete the original folder
+                await sourceModifiableFolder.DeleteAsync(storableChild);
+
+                // Remove old registration and add new one
+                _storableRegistry.TryRemove(sourceItemId, out _);
+
+                string newFolderId = ProtocolRegistry.IsCustomProtocol(targetParentFolderId) ? 
+                    StorageTools.CreateCustomItemId(targetParentFolderId, targetFolder.Name) : 
+                    targetFolder.Id;
+                _storableRegistry[newFolderId] = targetFolder;
+
+                return new
+                {
+                    id = newFolderId,
+                    name = targetFolder.Name,
+                    type = "folder"
+                };
             }
             else
             {
-                // Use the existing 3-parameter overload
-                movedFile = await targetModifiableFolder.MoveFromAsync(sourceFile, sourceModifiableFolder, overwrite);
+                throw new McpException($"Unsupported item type for moving: {sourceItem.GetType()}", McpErrorCode.InvalidParams);
             }
-            
-            // Remove old registration and add new one
-            _storableRegistry.TryRemove(sourceFileId, out _);
+        }
+        catch (McpException)
+        {
+            throw; // Re-throw MCP exceptions as-is
+        }
+        catch (Exception ex)
+        {
+            throw new McpException($"Failed to move item from '{sourceItemId}' to '{targetParentFolderId}': {ex.Message}", ex, McpErrorCode.InternalError);
+        }
+    }
 
-            string newFileId = ProtocolRegistry.IsCustomProtocol(targetParentFolderId) ? 
-                StorageTools.CreateCustomItemId(targetParentFolderId, movedFile.Name) : 
-                movedFile.Id;
-            _storableRegistry[newFileId] = movedFile;
+    
+
+    [McpServerTool, Description("Creates any missing folders along a relative path from a starting item. If the last segment contains a dot and no trailing slash, it's treated as a file and the parent of the leaf is created. Supports '.' and '..' segments.")]
+    public static async Task<object> CreateRelativeFolderPath(string startingItemId, string relativePath, bool overwrite = false)
+    {
+        try
+        {
+            await StorageTools.EnsureStorableRegistered(startingItemId);
+
+            if (!_storableRegistry.TryGetValue(startingItemId, out var startingItem))
+                throw new McpException($"Starting item with ID '{startingItemId}' not found", McpErrorCode.InvalidParams);
+
+            var result = await ((IFolder)startingItem).CreateFolderByRelativePathAsync(relativePath, overwrite, CancellationToken.None);
+
+            if (result is not IFolder resultFolder)
+                throw new McpException($"The resulting item is not a folder. Ensure the starting item is a folder or the path resolves to a folder.", McpErrorCode.InvalidParams);
+
+            // Register by internal ID and also expose alias/substituted ID for friendlier external use
+            // TODO: We need to do this for the entire chain of created folders from result to startingItem.
+            // Maybe optimize by having `CreateRelativeFolderPathAsync` return IAsyncEnumerable<IFolder>?
+            _storableRegistry[resultFolder.Id] = resultFolder;
+            string externalId = ProtocolRegistry.SubstituteWithMountAlias(resultFolder.Id);
+            if (externalId != resultFolder.Id)
+                _storableRegistry[externalId] = resultFolder;
 
             return new
             {
-                id = newFileId,
-                name = movedFile.Name,
-                type = "file"
+                id = externalId,
+                name = resultFolder.Name,
+                type = "folder"
             };
         }
         catch (McpException)
@@ -468,10 +470,7 @@ public static partial class StorageWriteTools
         }
         catch (Exception ex)
         {
-            throw new McpException($"Failed to move file from '{sourceFileId}' to '{targetParentFolderId}': {ex.Message}", ex, McpErrorCode.InternalError);
+            throw new McpException($"Failed to create relative folder path '{relativePath}' from '{startingItemId}': {ex.Message}", ex, McpErrorCode.InternalError);
         }
     }
-
-    // Removed separate CreateArchive tool; functionality merged into CreateFile.
-
 }

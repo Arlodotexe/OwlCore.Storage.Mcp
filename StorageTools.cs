@@ -7,6 +7,7 @@ using OwlCore.Kubo;
 using System.Collections.Concurrent;
 using System.Text;
 using Ipfs.Http;
+using CommunityToolkit.Diagnostics;
 
 namespace OwlCore.Storage.Mcp;
 
@@ -16,6 +17,19 @@ public static class StorageTools
     internal static readonly ConcurrentDictionary<string, IStorable> _storableRegistry = new();
     private static volatile bool _isInitialized = false;
     private static readonly SemaphoreSlim _initializationSemaphore = new(1, 1);
+    
+    // Issue003: inbound canonicalization for browsable protocols only (filesystem-like); resource protocols keep original form.
+    private static string NormalizeInboundExternalId(string id)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return id;
+        var sep = id.IndexOf("://", StringComparison.Ordinal);
+        if (sep <= 0) return id; // not a scheme-form ID
+        var scheme = id.Substring(0, sep);
+        var handler = ProtocolRegistry.GetProtocolHandler($"{scheme}://");
+        if (handler?.HasBrowsableRoot == true)
+            return StoragePathNormalizer.NormalizeExternalId(id);
+        return id; // leave non-browsable protocols unchanged (trailing slash may be semantic)
+    }
     
     static StorageTools()
     {
@@ -72,6 +86,20 @@ public static class StorageTools
     {
         // Ensure the storage system is fully initialized first
         await EnsureInitializedAsync();
+
+    // Issue003: early canonicalization (memory://foo/ -> memory://foo, preserving roots) for identity + symmetric errors.
+        var originalId = id;
+        var normalizedId = StoragePathNormalizer.NormalizeExternalId(originalId);
+        if (normalizedId != originalId)
+        {
+            // Fast path: if normalized already registered, just map alias and return.
+            if (_storableRegistry.TryGetValue(normalizedId, out var existing))
+            {
+                _storableRegistry[originalId] = existing; // alias key
+                return;
+            }
+            id = normalizedId; // proceed using normalized id
+        }
         
         // Check if already registered - if so, we're done
         if (_storableRegistry.ContainsKey(id)) 
@@ -297,6 +325,8 @@ public static class StorageTools
     {
         try
         {
+            // Inbound normalization for browsable protocols only (Issue 003 symmetry)
+            folderId = NormalizeInboundExternalId(folderId);
             if (string.IsNullOrWhiteSpace(folderId))
                 throw new McpException("Folder ID cannot be empty", McpErrorCode.InvalidParams);
 
@@ -481,7 +511,6 @@ public static class StorageTools
     {
         try
         {
-            // Quick validation for obviously invalid IDs
             if (string.IsNullOrWhiteSpace(startingItemId))
                 throw new McpException("Starting item ID cannot be empty", McpErrorCode.InvalidParams);
 
@@ -489,18 +518,29 @@ public static class StorageTools
 
             if (!_storableRegistry.TryGetValue(startingItemId, out var startingItem))
             {
-                // If the starting item isn't found, provide helpful guidance
                 var availableDrives = await GetAvailableDrives();
                 var driveList = string.Join(", ", availableDrives.Cast<dynamic>().Select(d => $"'{d.id}'"));
                 throw new McpException($"Starting item with ID '{startingItemId}' not found. For new navigation, use drive roots from GetAvailableDrives(): {driveList}", McpErrorCode.InvalidParams);
             }
 
-            var targetItem = await startingItem.GetItemByRelativePathAsync(relativePath, CancellationToken.None);
+            IStorable? lastItem = null;
+
+            // Register each item along the navigation chain during iteration (non-creating traversal)
+            await foreach (var node in startingItem.GetItemsAlongRelativePathAsync(relativePath, CancellationToken.None))
+            {
+                _storableRegistry[node.Id] = node;
+                var aliasId = ProtocolRegistry.SubstituteWithMountAlias(node.Id);
+                if (aliasId != node.Id)
+                    _storableRegistry[aliasId] = node;
+
+                lastItem = node;
+            }
+
+            Guard.IsNotNull(lastItem);
+            var targetItem = lastItem;
             _storableRegistry[targetItem.Id] = targetItem;
 
-            // Use mount alias substitution to present shorter IDs externally
-            string externalId = ProtocolRegistry.SubstituteWithMountAlias(targetItem.Id);
-            // Ensure the alias also maps to the same item for external access
+            var externalId = ProtocolRegistry.SubstituteWithMountAlias(targetItem.Id);
             if (externalId != targetItem.Id)
                 _storableRegistry[externalId] = targetItem;
 
@@ -518,7 +558,7 @@ public static class StorageTools
         }
         catch (McpException)
         {
-            throw; // Re-throw MCP exceptions as-is
+            throw;
         }
         catch (Exception ex)
         {
@@ -526,7 +566,7 @@ public static class StorageTools
         }
     }
 
-    [McpServerTool, Description("Gets the relative path from one folder to another item.")]
+    [McpServerTool, Description("Gets a relative path from a folder to a child item and registers the chain along that path.")]
     public static async Task<string> GetRelativePath(string fromFolderId, string toItemId)
     {
         try
@@ -540,7 +580,20 @@ public static class StorageTools
             if (!_storableRegistry.TryGetValue(toItemId, out var toItem) || toItem is not IStorableChild toChild)
                 throw new McpException($"To item with ID '{toItemId}' not found or not a child item", McpErrorCode.InvalidParams);
 
-            return await fromFolder.GetRelativePathToAsync(toChild);
+            var relative = await fromFolder.GetRelativePathToAsync(toChild, CancellationToken.None);
+
+            IStorable? lastItem = null;
+
+            // Register each visited node along the computed relative path (non-creating traversal)
+            await foreach (var node in fromFolder.GetItemsAlongRelativePathAsync(relative, CancellationToken.None))
+            {
+                _storableRegistry[node.Id] = node;
+                var aliasId = ProtocolRegistry.SubstituteWithMountAlias(node.Id);
+                if (aliasId != node.Id)
+                    _storableRegistry[aliasId] = node;
+            }
+
+            return relative;
         }
         catch (McpException)
         {
@@ -914,7 +967,7 @@ public static class StorageTools
             if (string.IsNullOrWhiteSpace(protocolScheme))
                 throw new McpException("Protocol scheme cannot be null or empty", McpErrorCode.InvalidParams);
 
-            var wasUnmounted = ProtocolRegistry.UnmountFolder(protocolScheme);
+            var wasUnmounted = await ProtocolRegistry.UnmountFolder(protocolScheme);
             
             if (wasUnmounted)
             {
@@ -1015,5 +1068,22 @@ public static class StorageTools
         {
             throw new McpException($"Failed to rename mounted folder '{currentProtocolScheme}': {ex.Message}", ex, McpErrorCode.InternalError);
         }
+    }
+}
+
+// Issue003 helper: trim trailing slashes from scheme-form IDs (except roots) without touching internal (/...) IDs.
+internal static class StoragePathNormalizer
+{
+    internal static string NormalizeExternalId(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return raw;
+        if (raw.StartsWith('/')) return raw; // internal canonical IDs untouched
+        var sep = raw.IndexOf("://", StringComparison.Ordinal);
+        if (sep <= 0) return raw; // not a scheme-form ID
+        if (raw.EndsWith("://", StringComparison.Ordinal)) return raw; // root URI
+        int end = raw.Length - 1;
+        while (end >= 0 && raw[end] == '/') end--; // trim all trailing slashes
+        if (end == raw.Length - 1) return raw; // no trailing slash
+        return raw.Substring(0, end + 1);
     }
 }

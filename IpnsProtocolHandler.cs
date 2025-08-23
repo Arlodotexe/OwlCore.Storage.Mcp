@@ -10,6 +10,13 @@ namespace OwlCore.Storage.Mcp;
 /// </summary>
 public class IpnsProtocolHandler : IProtocolHandler
 {
+    private readonly IpfsClient _client;
+
+    public IpnsProtocolHandler(IpfsClient client)
+    {
+        _client = client;
+    }
+
     public bool HasBrowsableRoot => false; // IPNS doesn't have a single global root, but individual names can point to browsable folders
 
     public Task<IStorable?> CreateRootAsync(string rootUri, CancellationToken cancellationToken = default)
@@ -30,13 +37,11 @@ public class IpnsProtocolHandler : IProtocolHandler
         if (string.IsNullOrEmpty(ipnsName))
             throw new ArgumentException($"Could not extract IPNS name from URI: {resourceUri}");
 
-        var client = new IpfsClient();
-        
         try
         {
             Console.WriteLine("[IPNS] Testing IPFS client accessibility...");
             // Test if IPFS client is accessible first
-            await client.Generic.IdAsync();
+            await _client.Generic.IdAsync();
             Console.WriteLine("[IPNS] IPFS client is accessible");
         }
         catch (Exception ex)
@@ -58,14 +63,14 @@ public class IpnsProtocolHandler : IProtocolHandler
             if (!string.IsNullOrEmpty(ipnsPath) && HasFileExtension(ipnsPath))
             {
                 Console.WriteLine($"[IPNS] Path appears to be a file, creating IpnsFile");
-                var ipnsFile = new IpnsFile(ipnsAddress, client);
+                var ipnsFile = new IpnsFile(ipnsAddress, _client);
                 Console.WriteLine($"[IPNS] Successfully created IpnsFile of type: {ipnsFile.GetType().Name}");
                 return ipnsFile;
             }
             else
             {
                 Console.WriteLine($"[IPNS] Path appears to be a folder, creating IpnsFolder");
-                var ipnsFolder = new IpnsFolder(ipnsAddress, client);
+                var ipnsFolder = new IpnsFolder(ipnsAddress, _client);
                 Console.WriteLine($"[IPNS] Successfully created IpnsFolder of type: {ipnsFolder.GetType().Name}");
                 return ipnsFolder;
             }
