@@ -605,29 +605,7 @@ public static class StorageTools
         }
     }
 
-    [McpServerTool, Description("Reads the content of a file as bytes by file ID, path, or URL.")]
-    public static async Task<byte[]> ReadFileAsBytes(string fileId)
-    {
-        try
-        {
-            await EnsureStorableRegistered(fileId);
-
-            if (!_storableRegistry.TryGetValue(fileId, out var item) || item is not IFile file)
-                throw new McpException($"File with ID '{fileId}' not found", McpErrorCode.InvalidParams);
-
-            return await file.ReadBytesAsync(CancellationToken.None);
-        }
-        catch (McpException)
-        {
-            throw; // Re-throw MCP exceptions as-is
-        }
-        catch (Exception ex)
-        {
-            throw new McpException($"Failed to read bytes from file '{fileId}': {ex.Message}", ex, McpErrorCode.InternalError);
-        }
-    }
-
-    [McpServerTool, Description("Reads the content of a file as text with specified encoding. Works with both browseable (local storage, memory, ipfs, ipns, mfs) and non-browseable (http, https) supported protocols.")]
+    //[McpServerTool, Description("Reads the content of a file as text with specified encoding. Works with both browseable (local storage, memory, ipfs, ipns, mfs) and non-browseable (http, https) supported protocols.")]
     public static async Task<string> ReadFileAsText([Description("The ID of the file to read.")] string fileId, string encoding = "UTF-8")
     {
         try
@@ -659,7 +637,7 @@ public static class StorageTools
     }
 
     [McpServerTool, Description("Reads file text from http, https, local storage, memory, ipfs, ipns, mfs, and all other supported protocols.")]
-    public static async Task<string> ReadFileTextRange([Description("The ID of the file to read.")] string fileId, [Description("1-based indexing.")] int startLine, [Description("Omit this to read to end of file.")] int? endLine = null)
+    public static async Task<string> ReadFileTextRange([Description("The ID of the file to read.")] string fileId, [Description("1-based indexing.")] int startLine, [Description("Omit this to read to end of file.")] int? endLine = null, int? columnLimit = 1000)
     {
         try
         {
@@ -671,6 +649,10 @@ public static class StorageTools
             // Explicitly reject endLine of 0 since it's invalid (1-based indexing)
             if (endLine.HasValue && endLine.Value <= 0)
                 throw new McpException($"Invalid endLine value: {endLine.Value}. endLine must be >= 1 (1-based indexing) or null to read to end. To read to end, omit endLine entirely.", McpErrorCode.InvalidParams);
+
+            // Validate columnLimit when provided
+            if (columnLimit.HasValue && columnLimit.Value <= 0)
+                throw new McpException($"Invalid columnLimit: {columnLimit.Value}. Must be a positive integer, or null to disable the limit.", McpErrorCode.InvalidParams);
 
             var content = await file.ReadTextAsync(CancellationToken.None);
             var lines = content.Split('\n');
@@ -685,6 +667,20 @@ public static class StorageTools
 
             // Extract the requested range (convert to 0-based indexing)
             var selectedLines = lines[(startLine - 1)..actualEndLine];
+
+            // Apply per-line column limit if specified
+            if (columnLimit is int maxCols)
+            {
+                for (int i = 0; i < selectedLines.Length; i++)
+                {
+                    var line = selectedLines[i];
+                    if (line.Length > maxCols)
+                    {
+                        selectedLines[i] = line.Substring(0, maxCols);
+                    }
+                }
+            }
+
             return string.Join('\n', selectedLines);
         }
         catch (McpException)
