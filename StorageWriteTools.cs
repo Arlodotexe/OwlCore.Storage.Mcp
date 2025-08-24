@@ -249,7 +249,7 @@ public static partial class StorageWriteTools
         }
     }
 
-    [McpServerTool, Description("Creates a copy of a file or folder in the specified target folder.")]
+    [McpServerTool, Description("Creates a copy of any file or folder in the specified target folder. Works across all supported protocols.")]
     public static async Task<object> CopyItem(string sourceItemId, string targetParentFolderId, string? newName = null, bool overwrite = false)
     {
         try

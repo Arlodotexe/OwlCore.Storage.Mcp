@@ -157,7 +157,7 @@ public static class StorageTools
             var knownProtocols = ProtocolRegistry.GetRegisteredProtocols();
             if (!knownProtocols.Contains(scheme))
             {
-                throw new InvalidOperationException($"Unknown protocol scheme '{scheme}' in ID '{registrationId}'. Known protocols: {string.Join(", ", knownProtocols)}. Use GetAvailableDrives() to see available starting points.");
+                throw new InvalidOperationException($"Unknown protocol scheme '{scheme}' in ID '{registrationId}'. Known protocols: {string.Join(", ", knownProtocols)}. Use GetAvailableDrives and GetSupportedProtocols to see available starting points.");
             }
 
             // CRITICAL: For protocols without browseable roots (like HTTP, IPFS, IPNS), 
@@ -239,7 +239,7 @@ public static class StorageTools
         return ProtocolRegistry.CreateCustomItemId(parentId, itemName);
     }
 
-    [McpServerTool, Description("Gets the paths of the available drives including IPFS MFS, Memory storage, mounted folders, and other custom protocol roots. Use these drive IDs as starting points for GetItemByRelativePath navigation.")]
+    [McpServerTool, Description("Gets the available browseable drives. Use these drive IDs as starting points for GetItemByRelativePath navigation.")]
     public static async Task<object[]> GetAvailableDrives()
     {
         var driveInfos = new List<object>();
@@ -320,7 +320,7 @@ public static class StorageTools
         return driveInfos.ToArray();
     }
 
-    [McpServerTool, Description("Lists all items in a folder by ID or path. Works with local folders, IPFS MFS, and IPFS/IPNS folder hashes. Returns array of items with their IDs, names, and types. TIP: For direct navigation to known paths, use GetItemByRelativePath with drive roots from GetAvailableDrives() instead of browsing folder by folder. Use SuggestStartingDrive() if unsure which drive to start from.")]
+    [McpServerTool, Description("Lists all items in a folder by ID or path. Returns array of items with their IDs, names, and types.")]
     public static async Task<object[]> GetFolderItems(string folderId)
     {
         try
@@ -605,7 +605,7 @@ public static class StorageTools
         }
     }
 
-    [McpServerTool, Description("Reads the content of a file as bytes by file ID, path, or URL (supports HTTP/HTTPS URLs, IPFS hashes, and IPNS names).")]
+    [McpServerTool, Description("Reads the content of a file as bytes by file ID, path, or URL.")]
     public static async Task<byte[]> ReadFileAsBytes(string fileId)
     {
         try
@@ -627,8 +627,8 @@ public static class StorageTools
         }
     }
 
-    [McpServerTool, Description("Reads the content of a file as text with specified encoding by file ID, path, or URL (supports HTTP/HTTPS URLs, IPFS hashes, and IPNS names).")]
-    public static async Task<string> ReadFileAsText(string fileId, string encoding = "UTF-8")
+    [McpServerTool, Description("Reads the content of a file as text with specified encoding. Works with both browseable (local storage, memory, ipfs, ipns, mfs) and non-browseable (http, https) supported protocols.")]
+    public static async Task<string> ReadFileAsText([Description("The ID of the file to read.")] string fileId, string encoding = "UTF-8")
     {
         try
         {
@@ -658,8 +658,8 @@ public static class StorageTools
         }
     }
 
-    [McpServerTool, Description("Reads a specific range of text from a file by line numbers (1-based indexing). To read from startLine to end of file, omit endLine parameter. To read specific range, provide both startLine and endLine. endLine must be >= startLine and <= total lines. Do NOT use endLine=0, use null or omit it.")]
-    public static async Task<string> ReadFileTextRange(string fileId, int startLine, int? endLine = null)
+    [McpServerTool, Description("Reads file text from http, https, local storage, memory, ipfs, ipns, mfs, and all other supported protocols.")]
+    public static async Task<string> ReadFileTextRange([Description("The ID of the file to read.")] string fileId, [Description("1-based indexing.")] int startLine, [Description("Omit this to read to end of file.")] int? endLine = null)
     {
         try
         {
@@ -855,7 +855,7 @@ public static class StorageTools
         }
     }
 
-    [McpServerTool, Description("Lists all supported storage protocols and their capabilities")]
+    [McpServerTool, Description("Lists all supported storage protocols and their capabilities (mfs, memory, http, ipfs, ipns).")]
     public static object[] GetSupportedProtocols()
     {
         var protocols = new List<object>();
