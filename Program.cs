@@ -98,12 +98,12 @@ AppDomain.CurrentDomain.UnhandledException += (object sender, UnhandledException
 // Set up KuboBootstrapper and IpfsClient
 Logger.LogInformation(mcpWorkingFolder.Id);
 var kuboRepoPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ipfs");
-var kubo = new KuboBootstrapper(kuboRepoPath, new Version(0, 35, 0))
+var kubo = new KuboBootstrapper(kuboRepoPath, new Version(0, 37, 0))
 {
     ApiUri = new Uri("http://127.0.0.1:5001"),
     GatewayUri = new Uri("http://127.0.0.1:8080"),
     BinaryWorkingFolder = mcpWorkingFolder,
-    LaunchConflictMode = BootstrapLaunchConflictMode.Relaunch,
+    LaunchConflictMode = BootstrapLaunchConflictMode.Attach,
 };
 
 await kubo.StartAsync();
