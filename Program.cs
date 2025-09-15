@@ -34,8 +34,11 @@ Console.InputEncoding = Encoding.UTF8;
 // Working data
 var appData = new SystemFolder(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData));
 var owlCoreFolder = (SystemFolder)await appData.CreateFolderAsync("OwlCore", overwrite: false, cancellationToken);
+var ocKuboFolder = (SystemFolder)await owlCoreFolder.CreateFolderAsync("Kubo", overwrite: false, cancellationToken);
 var storageFolder = (SystemFolder)await owlCoreFolder.CreateFolderAsync("Storage", overwrite: false, cancellationToken);
 var mcpWorkingFolder = (SystemFolder)await storageFolder.CreateFolderAsync("Mcp", overwrite: false, cancellationToken);
+
+Logger.LogInformation($"Using data folder at {owlCoreFolder.Id}");
 
 var builder = Host.CreateApplicationBuilder(args);
 builder.Logging.AddConsole(consoleLogOptions =>
@@ -96,14 +99,15 @@ AppDomain.CurrentDomain.UnhandledException += (object sender, UnhandledException
 //TaskScheduler.UnobservedTaskException += (object? sender, UnobservedTaskExceptionEventArgs e) => Logger.LogError(e.Exception?.ToString() ?? "Error message not found", e.Exception);
 
 // Set up KuboBootstrapper and IpfsClient
-Logger.LogInformation(mcpWorkingFolder.Id);
 var kuboRepoPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ipfs");
 var kubo = new KuboBootstrapper(kuboRepoPath, new Version(0, 37, 0))
 {
+    BinaryWorkingFolder = ocKuboFolder,
+    LaunchConflictMode = BootstrapLaunchConflictMode.Attach,
     ApiUri = new Uri("http://127.0.0.1:5001"),
     GatewayUri = new Uri("http://127.0.0.1:8080"),
-    BinaryWorkingFolder = mcpWorkingFolder,
-    LaunchConflictMode = BootstrapLaunchConflictMode.Attach,
+    ApiUriMode = ConfigMode.UseExisting,
+    GatewayUriMode = ConfigMode.UseExisting,
 };
 
 await kubo.StartAsync();
