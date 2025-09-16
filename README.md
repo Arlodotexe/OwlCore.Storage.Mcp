@@ -36,7 +36,7 @@ For **LM Studio** ([setup guide](https://lmstudio.ai/docs/app/plugins/mcp#instal
 ```json
 {
   "mcpServers": {
-    // Add the "owlcore-storage" server config object here
+    // Add the "OwlCore.Storage" server config object here
   }
 }
 ```
@@ -45,14 +45,14 @@ For **GitHub Copilot in VS Code** ([setup guide](https://code.visualstudio.com/d
 ```json
 {
   "servers": {
-    // Add the "owlcore-storage" server config object here
+    // Add the "OwlCore.Storage" server config object here
   }
 }
 ```
 
 In both cases, you'll need this server config object:
 ```json
-"owlcore-storage": {
+"OwlCore.Storage": {
   "command": "dotnet",
   "args": ["run", "--project", "/path/to/OwlCore.Storage.Mcp/"],
 }
