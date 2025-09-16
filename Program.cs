@@ -99,8 +99,9 @@ AppDomain.CurrentDomain.UnhandledException += (object sender, UnhandledException
 //TaskScheduler.UnobservedTaskException += (object? sender, UnobservedTaskExceptionEventArgs e) => Logger.LogError(e.Exception?.ToString() ?? "Error message not found", e.Exception);
 
 // Set up KuboBootstrapper and IpfsClient
-var kuboRepoPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ipfs");
-var kubo = new KuboBootstrapper(kuboRepoPath, new Version(0, 37, 0))
+var userProfileFolder = new SystemFolder(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+var kuboRepoFolder = (SystemFolder)await userProfileFolder.CreateFolderAsync(".ipfs", overwrite: false, cancellationToken);
+var kubo = new KuboBootstrapper(kuboRepoFolder.Path, new Version(0, 37, 0))
 {
     BinaryWorkingFolder = ocKuboFolder,
     LaunchConflictMode = BootstrapLaunchConflictMode.Attach,
