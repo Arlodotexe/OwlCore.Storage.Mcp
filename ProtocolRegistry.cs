@@ -83,7 +83,7 @@ public static class ProtocolRegistry
             var restoredCount = 0;
             var failed = new List<string>();
 
-            Console.WriteLine($"Found {mountsToRestore.Count} persisted mounts to restore from {mcpSettingsPath}");
+            Logger.LogInformation($"Found {mountsToRestore.Count} persisted mounts to restore from {mcpSettingsPath}");
 
             foreach (var cfg in mountsToRestore)
             {
@@ -121,7 +121,7 @@ public static class ProtocolRegistry
                     _mountedFolders[cfg.ProtocolScheme] = handler;
                     StorageTools._storableRegistry[$"{cfg.ProtocolScheme}://"] = folder;
                     restoredCount++;
-                    Console.WriteLine($"Restored mount: {cfg.ProtocolScheme}:// -> {originalId} (MountType: {cfg.MountType})");
+                    Logger.LogInformation($"Restored mount: {cfg.ProtocolScheme}:// -> {originalId} (MountType: {cfg.MountType})");
                 }
                 catch (Exception ex)
                 {
@@ -129,13 +129,13 @@ public static class ProtocolRegistry
                 }
             }
 
-            Console.WriteLine($"Mount restoration complete: {restoredCount} restored, {failed.Count} failed");
+            Logger.LogInformation($"Mount restoration complete: {restoredCount} restored, {failed.Count} failed");
             if (failed.Count > 0)
-                Console.WriteLine("Failed mounts: " + string.Join(", ", failed));
+                Logger.LogInformation("Failed mounts: " + string.Join(", ", failed));
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error initializing mount settings: {ex.Message}");
+            Logger.LogInformation($"Error initializing mount settings: {ex.Message}");
         }
     }
 
@@ -391,22 +391,22 @@ public static class ProtocolRegistry
                 // First, flush any pending changes if the folder supports it
                 if (mountedHandler.MountedFolder is IFlushable flushable)
                 {
-                    Console.WriteLine($"Flushing changes for mounted folder {protocolScheme}");
+                    Logger.LogInformation($"Flushing changes for mounted folder {protocolScheme}");
                     await flushable.FlushAsync(CancellationToken.None);
-                    Console.WriteLine($"Successfully flushed changes for {protocolScheme}");
+                    Logger.LogInformation($"Successfully flushed changes for {protocolScheme}");
                 }
                 
                 // Then dispose to release handles
                 if (mountedHandler.MountedFolder is IDisposable d)
                 {
-                    Console.WriteLine($"Disposing mounted folder for {protocolScheme}");
+                    Logger.LogInformation($"Disposing mounted folder for {protocolScheme}");
                     d.Dispose();
-                    Console.WriteLine($"Successfully disposed mounted folder for {protocolScheme}");
+                    Logger.LogInformation($"Successfully disposed mounted folder for {protocolScheme}");
                 }
             }
             catch (Exception ex) 
             { 
-                Console.WriteLine($"Error flushing/disposing mounted folder for {protocolScheme}: {ex.Message}");
+                Logger.LogInformation($"Error flushing/disposing mounted folder for {protocolScheme}: {ex.Message}");
             }
         }
 

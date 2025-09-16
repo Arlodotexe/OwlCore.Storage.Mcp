@@ -1,6 +1,7 @@
 using OwlCore.Storage;
 using OwlCore.Kubo;
 using Ipfs.Http;
+using OwlCore.Diagnostics;
 
 namespace OwlCore.Storage.Mcp;
 
@@ -34,7 +35,7 @@ public class IpfsProtocolHandler : IProtocolHandler
             var hash = ExtractIpfsHash(resourceUri);
             if (string.IsNullOrEmpty(hash))
             {
-                Console.WriteLine($"Could not extract IPFS hash from URI: {resourceUri}");
+                Logger.LogInformation($"Could not extract IPFS hash from URI: {resourceUri}");
                 return null;
             }
 
@@ -42,22 +43,22 @@ public class IpfsProtocolHandler : IProtocolHandler
             try
             {
                 await _client.Generic.IdAsync();
-                Console.WriteLine("IPFS client connectivity test passed");
+                Logger.LogInformation("IPFS client connectivity test passed");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"IPFS client connectivity test failed: {ex.Message}");
+                Logger.LogInformation($"IPFS client connectivity test failed: {ex.Message}");
                 throw new InvalidOperationException($"Cannot connect to IPFS node: {ex.Message}", ex);
             }
 
             // IpfsFolder can represent either a folder or a file - it will determine the type based on the hash
             var ipfsFolder = new IpfsFolder(hash, _client);
-            Console.WriteLine($"Successfully created IpfsFolder for hash: {hash}");
+            Logger.LogInformation($"Successfully created IpfsFolder for hash: {hash}");
             return ipfsFolder;
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error creating IPFS resource for {resourceUri}: {ex.Message}");
+            Logger.LogInformation($"Error creating IPFS resource for {resourceUri}: {ex.Message}");
             throw;
         }
     }

@@ -3,7 +3,7 @@ using ModelContextProtocol;
 using System.ComponentModel;
 using OwlCore.Storage;
 using OwlCore.Storage.System.IO;
-using OwlCore.Kubo;
+using OwlCore.Diagnostics;
 using System.Collections.Concurrent;
 using System.Text;
 using Ipfs.Http;
@@ -64,12 +64,12 @@ public static class StorageTools
                         if (root != null)
                         {
                             _storableRegistry[rootUri] = root;
-                            Console.WriteLine($"Pre-registered protocol root: {rootUri}");
+                            Logger.LogInformation($"Pre-registered protocol root: {rootUri}");
                         }
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"Failed to pre-register {rootUri}: {ex.Message}");
+                        Logger.LogInformation($"Failed to pre-register {rootUri}: {ex.Message}");
                     }
                 }
             }
@@ -104,7 +104,7 @@ public static class StorageTools
         // Check if already registered - if so, we're done
         if (_storableRegistry.ContainsKey(id)) 
         {
-            Console.WriteLine($"[STORAGE] Item already registered: {id}");
+            Logger.LogInformation($"[STORAGE] Item already registered: {id}");
             return;
         }
 
@@ -120,13 +120,13 @@ public static class StorageTools
         {
             // Register the alias to point to the same resolved item
             _storableRegistry[id] = resolvedItem;
-            Console.WriteLine($"[STORAGE] Alias {id} resolved to existing item: {resolvedId}");
+            Logger.LogInformation($"[STORAGE] Alias {id} resolved to existing item: {resolvedId}");
             return;
         }
 
         // Use the resolved ID for registration attempts
         var registrationId = resolvedId;
-        Console.WriteLine($"[STORAGE] Attempting to register: {registrationId}");
+        Logger.LogInformation($"[STORAGE] Attempting to register: {registrationId}");
 
         // Handle regular filesystem paths first (fast path)
         if (Directory.Exists(registrationId))
@@ -135,7 +135,7 @@ public static class StorageTools
             _storableRegistry[registrationId] = folder;
             if (id != registrationId)
                 _storableRegistry[id] = folder;
-            Console.WriteLine($"[STORAGE] Registered system folder: {registrationId}");
+            Logger.LogInformation($"[STORAGE] Registered system folder: {registrationId}");
             return;
         }
         else if (File.Exists(registrationId))
@@ -144,7 +144,7 @@ public static class StorageTools
             _storableRegistry[registrationId] = file;
             if (id != registrationId)
                 _storableRegistry[id] = file;
-            Console.WriteLine($"[STORAGE] Registered system file: {registrationId}");
+            Logger.LogInformation($"[STORAGE] Registered system file: {registrationId}");
             return;
         }
 
@@ -194,7 +194,7 @@ public static class StorageTools
                 throw new InvalidOperationException($"No protocol handler found for '{scheme}'. Use GetAvailableDrives() to see available protocols.");
             }
 
-            Console.WriteLine($"[STORAGE] Found protocol handler for {registrationId}: {protocolHandler.GetType().Name}");
+            Logger.LogInformation($"[STORAGE] Found protocol handler for {registrationId}: {protocolHandler.GetType().Name}");
             
             try
             {
@@ -207,7 +207,7 @@ public static class StorageTools
                         _storableRegistry[registrationId] = root;
                         if (id != registrationId)
                             _storableRegistry[id] = root;
-                        Console.WriteLine($"[STORAGE] Successfully registered root: {registrationId}");
+                        Logger.LogInformation($"[STORAGE] Successfully registered root: {registrationId}");
                         return;
                     }
                 }
@@ -219,13 +219,13 @@ public static class StorageTools
                     _storableRegistry[registrationId] = resource;
                     if (id != registrationId)
                         _storableRegistry[id] = resource;
-                    Console.WriteLine($"[STORAGE] Successfully registered resource: {registrationId}");
+                    Logger.LogInformation($"[STORAGE] Successfully registered resource: {registrationId}");
                     return;
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[STORAGE] Failed to register {registrationId}: {ex.Message}");
+                Logger.LogInformation($"[STORAGE] Failed to register {registrationId}: {ex.Message}");
                 throw new InvalidOperationException($"Failed to access '{registrationId}': {ex.Message}. Use GetAvailableDrives() to see valid starting points.", ex);
             }
         }
