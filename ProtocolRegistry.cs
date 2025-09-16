@@ -23,16 +23,17 @@ public static class ProtocolRegistry
     private static readonly ConcurrentDictionary<string, IProtocolHandler> _protocolHandlers = new();
     private static readonly ConcurrentDictionary<string, MountedFolderProtocolHandler> _mountedFolders = new();
     private static readonly ConcurrentDictionary<string, string> _mountedOriginalIds = new(); // originalId -> protocolScheme
-    private static MountSettings _mountSettings = null!; // Initialized in EnsureInitializedAsync
+    public static MountSettings MountSettings = null!; // Initialized in EnsureInitializedAsync
     private static bool _isInitialized = false;
-    
+
     /// <summary>
     /// Initializes the protocol registry with IPFS client support
     /// </summary>
     public static void Initialize(IpfsClient ipfsClient)
     {
-        if (_isInitialized) return;
-        
+        if (_isInitialized)
+            return;
+
         // Register built-in protocol handlers
         RegisterProtocol("mfs", new IpfsMfsProtocolHandler(ipfsClient));
         RegisterProtocol("http", new HttpProtocolHandler());
@@ -43,7 +44,7 @@ public static class ProtocolRegistry
         // Add more protocols here as needed
         // RegisterProtocol("azure-blob", new AzureBlobProtocolHandler());
         // RegisterProtocol("s3", new S3ProtocolHandler());
-        
+
         _isInitialized = true;
     }
 
@@ -51,18 +52,24 @@ public static class ProtocolRegistry
     /// Ensures mount settings are initialized and mounts are restored
     /// Call this once during application startup
     /// </summary>
-    public static async Task EnsureInitializedAsync()
+    public static async Task EnsureInitializedAsync(CancellationToken cancellationToken)
     {
-        if (_mountSettings != null!) return; // Already initialized
-        
-        await InitializeSettingsAndRestoreMountsAsync();
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // Already initialized
+        if (MountSettings != null!)
+            return;
+
+        await InitializeSettingsAndRestoreMountsAsync(cancellationToken);
     }
 
     /// <summary>
     /// Initializes the settings system and restores persisted mounts
     /// </summary>
-    private static async Task InitializeSettingsAndRestoreMountsAsync()
+    private static async Task InitializeSettingsAndRestoreMountsAsync(CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         try
         {
             // Use a shared location for mount settings that syncs across MCP instances
@@ -70,16 +77,15 @@ public static class ProtocolRegistry
             var appDataPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
             var mcpSettingsPath = Path.Combine(appDataPath, "OwlCore", "Storage", "Mcp");
             Directory.CreateDirectory(mcpSettingsPath);
-            
+
             var settingsFolder = new SystemFolder(new DirectoryInfo(mcpSettingsPath));
-            
+
             // Initialize mount settings
-            _mountSettings = new MountSettings(settingsFolder);
-            await _mountSettings.LoadAsync();
-            _mountSettings.MigrateLegacyOriginalId();
+            MountSettings = new MountSettings(settingsFolder);
+            await MountSettings.LoadAsync();
 
             // Restore mounts in dependency order
-            var mountsToRestore = _mountSettings.GetMountsInDependencyOrder();
+            var mountsToRestore = MountSettings.GetMountsInDependencyOrder();
             var restoredCount = 0;
             var failed = new List<string>();
 
@@ -87,10 +93,12 @@ public static class ProtocolRegistry
 
             foreach (var cfg in mountsToRestore)
             {
+                cancellationToken.ThrowIfCancellationRequested();
+
                 try
                 {
                     var originalId = MountSettings.ResolveOriginalId(cfg);
-                    if (!await TryRegisterStorableAsync(originalId))
+                    if (!await TryRegisterStorableAsync(originalId, cancellationToken))
                     {
                         failed.Add($"{cfg.ProtocolScheme} (not accessible)");
                         continue;
@@ -103,10 +111,12 @@ public static class ProtocolRegistry
                     }
 
                     IFolder? folder = null;
+
                     // Archive mounts are stored as File. Detect by flags.
                     bool isArchiveMount = (cfg.MountType == StorableType.File && storable is IFile);
+
                     if (isArchiveMount && storable is IFile archiveFile)
-                        folder = await WrapArchiveFileAsync(archiveFile, CancellationToken.None);
+                        folder = await WrapArchiveFileAsync(archiveFile, cancellationToken);
                     else if (storable is IFolder f)
                         folder = f;
 
@@ -120,6 +130,7 @@ public static class ProtocolRegistry
                     _protocolHandlers[cfg.ProtocolScheme] = handler;
                     _mountedFolders[cfg.ProtocolScheme] = handler;
                     StorageTools._storableRegistry[$"{cfg.ProtocolScheme}://"] = folder;
+
                     restoredCount++;
                     Logger.LogInformation($"Restored mount: {cfg.ProtocolScheme}:// -> {originalId} (MountType: {cfg.MountType})");
                 }
@@ -142,7 +153,7 @@ public static class ProtocolRegistry
     /// <summary>
     /// Tries to register a storable item if it's not already registered
     /// </summary>
-    private static async Task<bool> TryRegisterStorableAsync(string id)
+    private static async Task<bool> TryRegisterStorableAsync(string id, CancellationToken cancellationToken)
     {
         try
         {
@@ -152,7 +163,7 @@ public static class ProtocolRegistry
             // Avoid circular dependency during initialization - only try filesystem paths directly
             if (Directory.Exists(id)) { StorageTools._storableRegistry[id] = new SystemFolder(new DirectoryInfo(id)); return true; }
             if (File.Exists(id)) { StorageTools._storableRegistry[id] = new SystemFile(new FileInfo(id)); return true; }
-            
+
             // For protocol-based IDs during initialization, try to resolve them carefully
             if (id.Contains("://"))
             {
@@ -164,7 +175,7 @@ public static class ProtocolRegistry
                     {
                         try
                         {
-                            var root = await handler.CreateRootAsync(id, CancellationToken.None);
+                            var root = await handler.CreateRootAsync(id, cancellationToken);
                             if (root != null) { StorageTools._storableRegistry[id] = root; return true; }
                         }
                         catch { return false; }
@@ -177,7 +188,7 @@ public static class ProtocolRegistry
                             var rel = id.Substring(($"{scheme}://").Length);
                             if (!string.IsNullOrEmpty(rel))
                             {
-                                var target = await mountHandler.MountedFolder.GetItemByRelativePathAsync(rel, CancellationToken.None);
+                                var target = await mountHandler.MountedFolder.GetItemByRelativePathAsync(rel, cancellationToken);
                                 StorageTools._storableRegistry[id] = target;
                                 return true;
                             }
@@ -186,7 +197,7 @@ public static class ProtocolRegistry
                     }
                 }
             }
-            
+
             // For all other cases during initialization, we can't resolve them yet
             return false;
         }
@@ -279,8 +290,8 @@ public static class ProtocolRegistry
         StorageTools._storableRegistry[rootUri] = folderToMount;
 
         var idToStore = originalId ?? (storable is IStorableChild sc ? sc.Id : storable.Id);
-        _mountSettings.AddOrUpdateMount(protocolScheme, idToStore, mountName, mountType);
-        
+        MountSettings.AddOrUpdateMount(protocolScheme, idToStore, mountName, mountType);
+
         if (mountType == StorableType.File)
             _mountedOriginalIds[idToStore] = protocolScheme;
         return rootUri;
@@ -308,7 +319,7 @@ public static class ProtocolRegistry
     {
         var visited = new HashSet<string>();
         var stack = new HashSet<string>();
-        
+
         return HasCycleDfs(sourceFolderId, targetProtocolScheme, visited, stack);
     }
 
@@ -343,7 +354,7 @@ public static class ProtocolRegistry
     {
         var currentPath = mountedPath;
         var depth = 0;
-        
+
         while (depth < maxDepth)
         {
             var scheme = ExtractScheme(currentPath);
@@ -380,6 +391,7 @@ public static class ProtocolRegistry
     {
         if (string.IsNullOrWhiteSpace(protocolScheme))
             return false;
+
         if (!_mountedFolders.ContainsKey(protocolScheme))
             return false;
 
@@ -395,7 +407,7 @@ public static class ProtocolRegistry
                     await flushable.FlushAsync(CancellationToken.None);
                     Logger.LogInformation($"Successfully flushed changes for {protocolScheme}");
                 }
-                
+
                 // Then dispose to release handles
                 if (mountedHandler.MountedFolder is IDisposable d)
                 {
@@ -404,8 +416,8 @@ public static class ProtocolRegistry
                     Logger.LogInformation($"Successfully disposed mounted folder for {protocolScheme}");
                 }
             }
-            catch (Exception ex) 
-            { 
+            catch (Exception ex)
+            {
                 Logger.LogInformation($"Error flushing/disposing mounted folder for {protocolScheme}: {ex.Message}");
             }
         }
@@ -417,10 +429,11 @@ public static class ProtocolRegistry
 
         _protocolHandlers.TryRemove(protocolScheme, out _);
         _mountedFolders.TryRemove(protocolScheme, out _);
-        
+
         // Remove from persistent settings
-        _mountSettings.RemoveMount(protocolScheme);
-        
+        var targetConfig = MountSettings.Mounts.First(x => x.OriginalStorableId == mountedHandler?.MountedFolder.Id);
+        MountSettings.Mounts.Remove(targetConfig);
+
         return true;
     }
 
@@ -434,7 +447,8 @@ public static class ProtocolRegistry
         {
             StorableType mountType = StorableType.Folder;
             string originalId = string.Empty;
-            if (_mountSettings != null && _mountSettings.Mounts.TryGetValue(h.ProtocolScheme, out var cfg))
+
+            if (MountSettings != null && MountSettings.Mounts.FirstOrDefault(x => x.ProtocolScheme == h.ProtocolScheme) is { } cfg)
             {
                 mountType = cfg.MountType;
                 originalId = MountSettings.ResolveOriginalId(cfg);
@@ -469,7 +483,7 @@ public static class ProtocolRegistry
         protocolScheme = null;
         if (string.IsNullOrWhiteSpace(originalId))
             return false;
-        foreach (var cfg in _mountSettings.Mounts.Values)
+        foreach (var cfg in MountSettings.Mounts)
         {
             if (cfg.MountType != StorableType.File)
                 continue;
@@ -488,7 +502,7 @@ public static class ProtocolRegistry
     /// </summary>
     internal static MountSettings GetMountSettings()
     {
-        return _mountSettings; // Non-null after initialization
+        return MountSettings; // Non-null after initialization
     }
 
     /// <summary>
@@ -540,7 +554,7 @@ public static class ProtocolRegistry
             // Protocol scheme is changing - need to update both registries
             _protocolHandlers.TryRemove(currentProtocolScheme, out _);
             _mountedFolders.TryRemove(currentProtocolScheme, out _);
-            
+
             _protocolHandlers[finalProtocolScheme] = newHandler;
             _mountedFolders[finalProtocolScheme] = newHandler;
         }
@@ -552,7 +566,7 @@ public static class ProtocolRegistry
         }
 
         // Update persistent settings
-        _mountSettings.RenameMount(currentProtocolScheme, newProtocolScheme, newMountName);
+        MountSettings.RenameMount(currentProtocolScheme, newProtocolScheme, newMountName);
 
         return newRootUri;
     }
@@ -577,21 +591,21 @@ public static class ProtocolRegistry
                 continue;
 
             var mountedId = mountedChild.Id;
-            
+
             // Check if the full ID starts with the mounted folder's ID
             if (fullId.StartsWith(mountedId, StringComparison.OrdinalIgnoreCase))
             {
                 var matchLength = mountedId.Length;
-                
+
                 // Only substitute if this mount provides a longer match than what we already found
                 if (matchLength > longestMatchLength)
                 {
                     var remainingPart = fullId.Substring(matchLength);
                     // Ensure proper path separator handling
-                    var aliasId = string.IsNullOrEmpty(remainingPart) ? 
-                        $"{mount.ProtocolScheme}://" : 
+                    var aliasId = string.IsNullOrEmpty(remainingPart) ?
+                        $"{mount.ProtocolScheme}://" :
                         $"{mount.ProtocolScheme}://{remainingPart.TrimStart('/', '\\')}";
-                    
+
                     bestAlias = aliasId;
                     longestMatchLength = matchLength;
                 }
@@ -622,7 +636,7 @@ public static class ProtocolRegistry
 
         var currentId = aliasId;
         var depth = 0;
-        
+
         while (depth < maxDepth)
         {
             var scheme = ExtractScheme(currentId);
@@ -635,7 +649,7 @@ public static class ProtocolRegistry
 
             // Replace the mount scheme with the underlying ID
             var remainingPath = currentId.Substring($"{scheme}://".Length);
-            
+
             // Normalize path separators and combine properly
             if (string.IsNullOrEmpty(remainingPath))
             {
@@ -681,7 +695,7 @@ public static class ProtocolRegistry
             {
                 // Create a memory stream for fast archive operations
                 var backingMemoryStream = new MemoryStream();
-                
+
                 // Create a disposal delegate that will flush to file when disposed
                 var flushToFileDelegate = new DisposableDelegate()
                 {
@@ -691,20 +705,20 @@ public static class ProtocolRegistry
                         {
                             Logger.LogInformation($"DisposalDelegate triggered for archive: {archiveFile.Name}");
                             Logger.LogInformation($"Backing memory stream position: {backingMemoryStream.Position}, length: {backingMemoryStream.Length}");
-                            
+
                             // Open the file and flush the memory stream to it (synchronous)
                             // TODO: Needs DisposeAsync versions of DisposableDelegate and DelegatedDisposalStream.
                             using var destinationStream = archiveFile.OpenReadWriteAsync(CancellationToken.None).GetAwaiter().GetResult();
                             Logger.LogInformation($"Opened destination stream for {archiveFile.Name}, stream length: {destinationStream.Length}");
-                            
+
                             destinationStream.Position = 0;
                             destinationStream.SetLength(0);
                             Logger.LogInformation("Cleared destination stream");
-                            
+
                             backingMemoryStream.Position = 0;
                             backingMemoryStream.CopyTo(destinationStream);
                             Logger.LogInformation($"Copied {backingMemoryStream.Length} bytes from backing stream to file");
-                            
+
                             destinationStream.Flush();
                             Logger.LogInformation($"Flushed destination stream for {archiveFile.Name}");
                         }
@@ -715,13 +729,13 @@ public static class ProtocolRegistry
                         }
                     }
                 };
-                
+
                 // Wrap the memory stream with delegated disposal to trigger file flush
                 var backingStreamWithFlush = new DelegatedDisposalStream(backingMemoryStream)
                 {
                     Inner = flushToFileDelegate
                 };
-                
+
                 return new ArchiveFolder(archiveFile, backingStreamWithFlush);
             }
             catch

@@ -14,6 +14,7 @@ using System.Diagnostics;
 using OwlCore.Diagnostics;
 using OwlCore.Kubo;
 using Ipfs.Http;
+using OwlCore.Extensions;
 
 var startTime = DateTime.Now;
 
@@ -117,9 +118,9 @@ await kubo.StartAsync();
 ProtocolRegistry.Initialize(kubo.Client);
 
 // Initialize storage system and restore mounts before starting the server
-await ProtocolRegistry.EnsureInitializedAsync();
+await ProtocolRegistry.EnsureInitializedAsync(cancellationToken);
 
-await builder.Build().RunAsync();
+await builder.Build().RunAsync(cancellationToken);
 
 // [McpServerToolType]
 public static class EchoTool

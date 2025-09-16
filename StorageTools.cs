@@ -39,7 +39,7 @@ public static class StorageTools
     /// <summary>
     /// Ensures that the storage system is fully initialized before proceeding
     /// </summary>
-    private static async Task EnsureInitializedAsync()
+    private static async Task EnsureInitializedAsync(CancellationToken cancellationToken)
     {
         if (_isInitialized) return;
 
@@ -49,7 +49,7 @@ public static class StorageTools
             if (_isInitialized) return; // Double-check after acquiring lock
 
             // Initialize ProtocolRegistry and restore mounts
-            await ProtocolRegistry.EnsureInitializedAsync();
+            await ProtocolRegistry.EnsureInitializedAsync(cancellationToken);
             
             // Pre-register common protocol roots after mount restoration
             foreach (var protocolScheme in ProtocolRegistry.GetRegisteredProtocols())
@@ -82,10 +82,10 @@ public static class StorageTools
         }
     }
 
-    internal static async Task EnsureStorableRegistered(string id)
+    internal static async Task EnsureStorableRegistered(string id, CancellationToken cancellationToken)
     {
         // Ensure the storage system is fully initialized first
-        await EnsureInitializedAsync();
+        await EnsureInitializedAsync(cancellationToken);
 
     // Issue003: early canonicalization (memory://foo/ -> memory://foo, preserving roots) for identity + symmetric errors.
         var originalId = id;
@@ -243,6 +243,7 @@ public static class StorageTools
     public static async Task<object[]> GetAvailableDrives()
     {
         var driveInfos = new List<object>();
+        var cancellationToken = CancellationToken.None;
 
         // Get all available drives
         var drives = DriveInfo.GetDrives();
@@ -274,7 +275,7 @@ public static class StorageTools
         }
 
         // Add mounted folders
-        await ProtocolRegistry.EnsureInitializedAsync();
+        await ProtocolRegistry.EnsureInitializedAsync(cancellationToken);
         var mountedFolders = ProtocolRegistry.GetMountedFolders();
         foreach (var mount in mountedFolders)
         {
@@ -323,6 +324,8 @@ public static class StorageTools
     [McpServerTool, Description("Lists all items in a folder by ID or path. Returns array of items with their IDs, names, and types.")]
     public static async Task<object[]> GetFolderItems(string folderId)
     {
+        var cancellationToken = CancellationToken.None;
+
         try
         {
             // Inbound normalization for browsable protocols only (Issue 003 symmetry)
@@ -330,7 +333,7 @@ public static class StorageTools
             if (string.IsNullOrWhiteSpace(folderId))
                 throw new McpException("Folder ID cannot be empty", McpErrorCode.InvalidParams);
 
-            await EnsureStorableRegistered(folderId);
+            await EnsureStorableRegistered(folderId, cancellationToken);
 
             // Archive guidance (mirrors GetFolderFiles/GetFolderSubfolders)
             if (_storableRegistry.TryGetValue(folderId, out var origItem) && origItem is IFile && ProtocolRegistry.TryGetArchiveMountScheme(folderId, out var archiveScheme) && !folderId.EndsWith("://"))
@@ -361,13 +364,14 @@ public static class StorageTools
     [McpServerTool, Description("Lists only files in a folder by ID or path. Returns array of file items.")]
     public static async Task<object[]> GetFolderFiles(string folderId)
     {
+        var cancellationToken = CancellationToken.None;
         try
         {
             // Quick validation for obviously invalid IDs
             if (string.IsNullOrWhiteSpace(folderId))
                 throw new McpException("Folder ID cannot be empty", McpErrorCode.InvalidParams);
 
-            await EnsureStorableRegistered(folderId);
+            await EnsureStorableRegistered(folderId, cancellationToken);
 
             // Archive guidance
             if (_storableRegistry.TryGetValue(folderId, out var origItem2) && origItem2 is IFile && ProtocolRegistry.TryGetArchiveMountScheme(folderId, out var archiveScheme2) && !folderId.EndsWith("://"))
@@ -411,13 +415,14 @@ public static class StorageTools
     [McpServerTool, Description("Lists only folders in a folder by ID or path. Returns array of folder items.")]
     public static async Task<object[]> GetFolderSubfolders(string folderId)
     {
+        var cancellationToken = CancellationToken.None;
         try
         {
             // Quick validation for obviously invalid IDs
             if (string.IsNullOrWhiteSpace(folderId))
                 throw new McpException("Folder ID cannot be empty", McpErrorCode.InvalidParams);
 
-            await EnsureStorableRegistered(folderId);
+            await EnsureStorableRegistered(folderId, cancellationToken);
 
             // Archive guidance
             if (_storableRegistry.TryGetValue(folderId, out var origItem3) && origItem3 is IFile && ProtocolRegistry.TryGetArchiveMountScheme(folderId, out var archiveScheme3) && !folderId.EndsWith("://"))
@@ -461,9 +466,10 @@ public static class StorageTools
     [McpServerTool, Description("Gets an item with a known ID by recursively searching through a folder hierarchy. The targetItemId must be a known storable ID, not a filename or search term.")]
     public static async Task<object?> GetItemRecursively(string folderId, string targetItemId)
     {
+        var cancellationToken = CancellationToken.None;
         try
         {
-            await EnsureStorableRegistered(folderId);
+            await EnsureStorableRegistered(folderId, cancellationToken);
 
             if (!_storableRegistry.TryGetValue(folderId, out var registeredItem) || registeredItem is not IFolder folder)
                 throw new McpException($"Folder with ID '{folderId}' not found", McpErrorCode.InvalidParams);
@@ -509,12 +515,13 @@ public static class StorageTools
     [McpServerTool, Description("Navigates to an item using a relative path from a starting item.")]
     public static async Task<object> GetItemByRelativePath(string startingItemId, string relativePath)
     {
+        var cancellationToken = CancellationToken.None;
         try
         {
             if (string.IsNullOrWhiteSpace(startingItemId))
                 throw new McpException("Starting item ID cannot be empty", McpErrorCode.InvalidParams);
 
-            await EnsureStorableRegistered(startingItemId);
+            await EnsureStorableRegistered(startingItemId, cancellationToken);
 
             if (!_storableRegistry.TryGetValue(startingItemId, out var startingItem))
             {
@@ -569,10 +576,11 @@ public static class StorageTools
     [McpServerTool, Description("Gets a relative path from a folder to a child item and registers the chain along that path.")]
     public static async Task<string> GetRelativePath(string fromFolderId, string toItemId)
     {
+        var cancellationToken = CancellationToken.None;
         try
         {
-            await EnsureStorableRegistered(fromFolderId);
-            await EnsureStorableRegistered(toItemId);
+            await EnsureStorableRegistered(fromFolderId, cancellationToken);
+            await EnsureStorableRegistered(toItemId, cancellationToken);
 
             if (!_storableRegistry.TryGetValue(fromFolderId, out var fromItem) || fromItem is not IFolder fromFolder)
                 throw new McpException($"From folder with ID '{fromFolderId}' not found or not a folder", McpErrorCode.InvalidParams);
@@ -608,9 +616,10 @@ public static class StorageTools
     //[McpServerTool, Description("Reads the content of a file as text with specified encoding. Works with both browseable (local storage, memory, ipfs, ipns, mfs) and non-browseable (http, https) supported protocols.")]
     public static async Task<string> ReadFileAsText([Description("The ID of the file to read.")] string fileId, string encoding = "UTF-8")
     {
+        var cancellationToken = CancellationToken.None;
         try
         {
-            await EnsureStorableRegistered(fileId);
+            await EnsureStorableRegistered(fileId, cancellationToken);
 
             if (!_storableRegistry.TryGetValue(fileId, out var item) || item is not IFile file)
                 throw new McpException($"File with ID '{fileId}' not found", McpErrorCode.InvalidParams);
@@ -639,9 +648,10 @@ public static class StorageTools
     [McpServerTool, Description("Reads file text from http, https, local storage, memory, ipfs, ipns, mfs, and all other supported protocols.")]
     public static async Task<string> ReadFileTextRange([Description("The ID of the file to read.")] string fileId, [Description("1-based indexing.")] int startLine, [Description("Omit this to read to end of file.")] int? endLine = null, int? columnLimit = 1000)
     {
+        var cancellationToken = CancellationToken.None;
         try
         {
-            await EnsureStorableRegistered(fileId);
+            await EnsureStorableRegistered(fileId, cancellationToken);
 
             if (!_storableRegistry.TryGetValue(fileId, out var item) || item is not IFile file)
                 throw new McpException($"File with ID '{fileId}' not found", McpErrorCode.InvalidParams);
@@ -696,9 +706,10 @@ public static class StorageTools
     [McpServerTool, Description("Gets information about a seen storable item by ID, path, or URL")]
     public static async Task<object?> GetStorableInfo(string id)
     {
+        var cancellationToken = CancellationToken.None;
         try
         {
-            await EnsureStorableRegistered(id);
+            await EnsureStorableRegistered(id, cancellationToken);
 
             if (!_storableRegistry.TryGetValue(id, out var storable))
                 throw new McpException($"Item with ID '{id}' not found", McpErrorCode.InvalidParams);
@@ -728,9 +739,10 @@ public static class StorageTools
     [McpServerTool, Description("Gets the root folder of a storage item by tracing up the parent hierarchy.")]
     public static async Task<object?> GetRootFolder(string itemId)
     {
+        var cancellationToken = CancellationToken.None;
         try
         {
-            await EnsureStorableRegistered(itemId);
+            await EnsureStorableRegistered(itemId, cancellationToken);
 
             if (!_storableRegistry.TryGetValue(itemId, out var item) || item is not IStorableChild storableChild)
                 throw new McpException($"Item with ID '{itemId}' not found or not a child item", McpErrorCode.InvalidParams);
@@ -767,9 +779,10 @@ public static class StorageTools
     [McpServerTool, Description("Gets a specific item by ID from a folder.")]
     public static async Task<object> GetItemById(string folderId, string itemId)
     {
+        var cancellationToken = CancellationToken.None;
         try
         {
-            await EnsureStorableRegistered(folderId);
+            await EnsureStorableRegistered(folderId, cancellationToken);
 
             if (!_storableRegistry.TryGetValue(folderId, out var registeredItem) || registeredItem is not IFolder folder)
                 throw new McpException($"Folder with ID '{folderId}' not found", McpErrorCode.InvalidParams);
@@ -815,9 +828,10 @@ public static class StorageTools
     [McpServerTool, Description("Gets the parent folder of a storage item.")]
     public static async Task<object?> GetParentFolder(string itemId)
     {
+        var cancellationToken = CancellationToken.None;
         try
         {
-            await EnsureStorableRegistered(itemId);
+            await EnsureStorableRegistered(itemId, cancellationToken);
 
             if (!_storableRegistry.TryGetValue(itemId, out var item) || item is not IStorableChild storableChild)
                 throw new McpException($"Item with ID '{itemId}' not found or not a child item", McpErrorCode.InvalidParams);
@@ -904,6 +918,7 @@ public static class StorageTools
         [Description("The custom protocol scheme to use (e.g., 'myproject', 'backup', 'archive')")] string protocolScheme,
         [Description("Display name for the mounted item")] string mountName)
     {
+        var cancellationToken = CancellationToken.None;
         try
         {
             if (string.IsNullOrWhiteSpace(folderId))
@@ -915,7 +930,7 @@ public static class StorageTools
             if (protocolScheme.Contains("://") || protocolScheme.Contains("/") || protocolScheme.Contains("\\"))
                 throw new McpException("Protocol scheme must be a simple identifier without special characters", McpErrorCode.InvalidParams);
 
-            await EnsureStorableRegistered(folderId);
+            await EnsureStorableRegistered(folderId, cancellationToken);
             if (!_storableRegistry.TryGetValue(folderId, out var registeredItem))
                 throw new McpException($"Item with ID '{folderId}' not found", McpErrorCode.InvalidParams);
 
@@ -1008,7 +1023,8 @@ public static class StorageTools
     [McpServerTool, Description("Lists all currently mounted folders and their information.")]
     public static async Task<object[]> GetMountedFolders()
     {
-        await ProtocolRegistry.EnsureInitializedAsync();
+        var cancellationToken = CancellationToken.None;
+        await ProtocolRegistry.EnsureInitializedAsync(cancellationToken);
         return ProtocolRegistry.GetMountedFolders();
     }
 

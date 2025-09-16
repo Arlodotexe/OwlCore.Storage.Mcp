@@ -20,9 +20,10 @@ public static partial class StorageWriteTools
     [McpServerTool, Description("Creates a new folder in the specified parent folder by ID or path.")]
     public static async Task<object> CreateFolder(string parentFolderId, string folderName)
     {
+        var cancellationToken = CancellationToken.None;
         try
         {
-            await StorageTools.EnsureStorableRegistered(parentFolderId);
+            await StorageTools.EnsureStorableRegistered(parentFolderId, cancellationToken);
 
             if (!_storableRegistry.TryGetValue(parentFolderId, out var storable) || storable is not IModifiableFolder modifiableFolder)
                 throw new McpException($"Modifiable folder with ID '{parentFolderId}' not found or not modifiable", McpErrorCode.InvalidParams);
@@ -51,9 +52,10 @@ public static partial class StorageWriteTools
     [McpServerTool, Description("Creates a new file in the specified parent folder by ID or path.")]
     public static async Task<object> CreateFile(string parentFolderId, string fileName, bool overwrite = false)
     {
+        var cancellationToken = CancellationToken.None;
         try
         {
-            await StorageTools.EnsureStorableRegistered(parentFolderId);
+            await StorageTools.EnsureStorableRegistered(parentFolderId, cancellationToken);
 
             if (!_storableRegistry.TryGetValue(parentFolderId, out var storable) || storable is not IModifiableFolder modifiableFolder)
                 throw new McpException($"Modifiable folder with ID '{parentFolderId}' not found or not modifiable", McpErrorCode.InvalidParams);
@@ -111,9 +113,10 @@ public static partial class StorageWriteTools
     [McpServerTool, Description("Writes text content to a file by file ID or path.")]
     public static async Task<string> WriteFileText(string fileId, string content)
     {
+        var cancellationToken = CancellationToken.None;
         try
         {
-            await StorageTools.EnsureStorableRegistered(fileId);
+            await StorageTools.EnsureStorableRegistered(fileId, cancellationToken);
 
             if (!_storableRegistry.TryGetValue(fileId, out var item) || item is not IFile file)
                 throw new McpException($"File with ID '{fileId}' not found", McpErrorCode.InvalidParams);
@@ -134,7 +137,8 @@ public static partial class StorageWriteTools
     [McpServerTool, Description("Writes text content to a specific line range in a file (1-based indexing). To INSERT or APPEND content at startLine, omit endLine parameter entirely. To REPLACE lines startLine through endLine, provide both parameters. Do NOT use endLine=0, use null or omit it.")]
     public static async Task<string> WriteFileTextRange(string fileId, string content, int startLine, int? endLine = null)
     {
-        await StorageTools.EnsureStorableRegistered(fileId);
+        var cancellationToken = CancellationToken.None;
+        await StorageTools.EnsureStorableRegistered(fileId, cancellationToken);
 
         if (!_storableRegistry.TryGetValue(fileId, out var item) || item is not IFile file)
             throw new McpException($"File with ID '{fileId}' not found", McpErrorCode.InvalidParams);
@@ -188,9 +192,10 @@ public static partial class StorageWriteTools
     [McpServerTool, Description("Writes text content to a file with specified encoding by file ID or path.")]
     public static async Task<string> WriteFileAsTextWithEncoding(string fileId, string content, string encoding = "UTF-8")
     {
+        var cancellationToken = CancellationToken.None;
         try
         {
-            await StorageTools.EnsureStorableRegistered(fileId);
+            await StorageTools.EnsureStorableRegistered(fileId, cancellationToken);
 
             if (!_storableRegistry.TryGetValue(fileId, out var item) || item is not IFile file)
                 throw new McpException($"File with ID '{fileId}' not found", McpErrorCode.InvalidParams);
@@ -220,9 +225,10 @@ public static partial class StorageWriteTools
     [McpServerTool, Description("Deletes a file or folder by ID or path from its parent folder.")]
     public static async Task<string> DeleteItem(string parentFolderId, string itemName)
     {
+        var cancellationToken = CancellationToken.None;
         try
         {
-            await StorageTools.EnsureStorableRegistered(parentFolderId);
+            await StorageTools.EnsureStorableRegistered(parentFolderId, cancellationToken);
 
             if (!_storableRegistry.TryGetValue(parentFolderId, out var parent) || parent is not IModifiableFolder modifiableParent)
                 throw new McpException($"Parent folder with ID '{parentFolderId}' not found or not modifiable", McpErrorCode.InvalidParams);
@@ -252,10 +258,11 @@ public static partial class StorageWriteTools
     [McpServerTool, Description("Creates a copy of any file or folder in the specified target folder. Works across all supported protocols.")]
     public static async Task<object> CopyItem(string sourceItemId, string targetParentFolderId, string? newName = null, bool overwrite = false)
     {
+        var cancellationToken = CancellationToken.None;
         try
         {
-            await StorageTools.EnsureStorableRegistered(sourceItemId);
-            await StorageTools.EnsureStorableRegistered(targetParentFolderId);
+            await StorageTools.EnsureStorableRegistered(sourceItemId, cancellationToken);
+            await StorageTools.EnsureStorableRegistered(targetParentFolderId, cancellationToken);
 
             if (!_storableRegistry.TryGetValue(sourceItemId, out var sourceItem))
                 throw new McpException($"Source item with ID '{sourceItemId}' not found", McpErrorCode.InvalidParams);
@@ -340,11 +347,12 @@ public static partial class StorageWriteTools
     [McpServerTool, Description("Moves a file or folder from source folder to target folder using efficient move operations.")]
     public static async Task<object> MoveItem(string sourceItemId, string sourceFolderId, string targetParentFolderId, string? newName = null, bool overwrite = false)
     {
+        var cancellationToken = CancellationToken.None;
         try
         {
-            await StorageTools.EnsureStorableRegistered(sourceItemId);
-            await StorageTools.EnsureStorableRegistered(sourceFolderId);
-            await StorageTools.EnsureStorableRegistered(targetParentFolderId);
+            await StorageTools.EnsureStorableRegistered(sourceItemId, cancellationToken);
+            await StorageTools.EnsureStorableRegistered(sourceFolderId, cancellationToken);
+            await StorageTools.EnsureStorableRegistered(targetParentFolderId, cancellationToken);
 
             if (!_storableRegistry.TryGetValue(sourceItemId, out var sourceItem))
                 throw new McpException($"Source item with ID '{sourceItemId}' not found", McpErrorCode.InvalidParams);
@@ -437,14 +445,15 @@ public static partial class StorageWriteTools
     [McpServerTool, Description("Creates any missing folders along a relative path from a starting item. If the last segment contains a dot and no trailing slash, it's treated as a file and the parent of the leaf is created. Supports '.' and '..' segments.")]
     public static async Task<object> CreateRelativeFolderPath(string startingItemId, string relativePath, bool overwrite = false)
     {
+        var cancellationToken = CancellationToken.None;
         try
         {
-            await StorageTools.EnsureStorableRegistered(startingItemId);
+            await StorageTools.EnsureStorableRegistered(startingItemId, cancellationToken);
 
             if (!_storableRegistry.TryGetValue(startingItemId, out var startingItem))
                 throw new McpException($"Starting item with ID '{startingItemId}' not found", McpErrorCode.InvalidParams);
 
-            var result = await ((IFolder)startingItem).CreateFolderByRelativePathAsync(relativePath, overwrite, CancellationToken.None);
+            var result = await ((IFolder)startingItem).CreateFolderByRelativePathAsync(relativePath, overwrite, cancellationToken);
 
             if (result is not IFolder resultFolder)
                 throw new McpException($"The resulting item is not a folder. Ensure the starting item is a folder or the path resolves to a folder.", McpErrorCode.InvalidParams);
