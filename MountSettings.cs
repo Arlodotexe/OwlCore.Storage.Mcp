@@ -13,9 +13,9 @@ namespace OwlCore.Storage.Mcp;
 public class MountConfiguration
 {
     public string ProtocolScheme { get; set; } = string.Empty;
-    
-    [Obsolete("Use OriginalStorableId")] 
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+
+    [Obsolete("Use OriginalStorableId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.Always)]
     public string OriginalFolderId { get; set; } = string.Empty;
     public string OriginalStorableId { get; set; } = string.Empty;
     public string MountName { get; set; } = string.Empty;
@@ -31,7 +31,7 @@ public class MountConfiguration
 /// </summary>
 public class MountSettings : SettingsBase
 {
-    public MountSettings(IModifiableFolder settingsFolder) 
+    public MountSettings(IModifiableFolder settingsFolder)
         : base(settingsFolder, SystemTextSettingsSerializer.Singleton)
     {
     }
@@ -39,10 +39,30 @@ public class MountSettings : SettingsBase
     /// <summary>
     /// Dictionary of mount configurations keyed by protocol scheme
     /// </summary>
-    public Dictionary<string, MountConfiguration> Mounts
+    [Obsolete("Use Mounts. This is kept for migration reads only.")]
+    internal Dictionary<string, MountConfiguration> MountsLegacy
     {
-        get => GetSetting(() => new Dictionary<string, MountConfiguration>());
+        get => GetSetting(() => new Dictionary<string, MountConfiguration>(), "Mounts");
+        set => SetSetting(value, "Mounts");
+    }
+
+    /// <summary>
+    /// A flat list of mount configurations.
+    /// </summary>
+    /// <remarks>
+    /// This is preferred as it allows for multiple mounts of the same protocol scheme which each may be valid or invalid at different points in space or time, depending on the user.
+    /// </remarks>
+    public List<MountConfiguration> Mounts
+    {
+        get => GetSetting(() => new List<MountConfiguration>());
         set => SetSetting(value);
+    }
+
+    public override async Task LoadAsync(CancellationToken? cancellationToken = null)
+    {
+        await base.LoadAsync(cancellationToken);
+        MigrateMountConfigurationDictionaryToList();
+        MigrateLegacyOriginalFolderIdToStorableId();
     }
 
     /// <summary>
@@ -56,7 +76,7 @@ public class MountSettings : SettingsBase
             dependsOn.Add(scheme);
 
         var mounts = Mounts;
-        mounts[protocolScheme] = new MountConfiguration
+        mounts.Add(new MountConfiguration
         {
             ProtocolScheme = protocolScheme,
             // Do not populate deprecated OriginalFolderId anymore (kept for legacy reads)
@@ -66,17 +86,47 @@ public class MountSettings : SettingsBase
             CreatedAt = DateTime.UtcNow,
             DependsOn = dependsOn,
             MountType = mountType,
-        };
+        });
         Mounts = mounts; // persist
     }
 
-    internal void MigrateLegacyOriginalId()
+    internal void MigrateMountConfigurationDictionaryToList()
     {
+        try
+        {
+
+            Logger.LogInformation("Checking for legacy mount configuration dictionary to migrate...");
+            Logger.LogTrace($"Legacy mount configurations found: {MountsLegacy.Count}");
+            if (MountsLegacy.Count == 0)
+                return;
+
+            // Legacy mount migration must be run before superseded list-based property is accessed.
+            // If data exists in the "Mounts" file, it will be loaded by the legacy property and migrated.
+            // When this happens, the type file must also be updated to reflect the new type.
+            // Saving should do this automatically, so we stop there and wait for an explicit save to be requested.
+            var mounts = MountsLegacy.Values.ToList();
+            base.ResetSetting("Mounts"); // clear legacy setting
+
+            Mounts = mounts;
+            Logger.LogCritical("Migrated legacy mount configuration dictionary to list. Please save settings to complete migration.");
+        }
+        catch (InvalidCastException ex) when (ex.Message.Contains($"Unable to cast object of type '{typeof(List<MountConfiguration>)}' to type '{typeof(Dictionary<string, MountConfiguration>)}'"))
+        {
+            Logger.LogInformation("Legacy mount dictionary not present or already migrated. Skipping migration.");
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("Failed to migrate legacy mount configuration dictionary to list.", ex);
+        }
+    }
+
+    internal void MigrateLegacyOriginalFolderIdToStorableId()
+    {
+        #pragma warning disable CS0612 // Suppress 'obsolete' warnings for legacy migration
         var mounts = Mounts;
         var changed = false;
-        foreach (var kvp in mounts)
+        foreach (var cfg in mounts)
         {
-            var cfg = kvp.Value;
             if (string.IsNullOrEmpty(cfg.OriginalStorableId) && !string.IsNullOrEmpty(cfg.OriginalFolderId))
             {
                 cfg.OriginalStorableId = cfg.OriginalFolderId;
@@ -86,18 +136,7 @@ public class MountSettings : SettingsBase
         }
         if (changed)
             Mounts = mounts; // triggers save
-    }
-
-    /// <summary>
-    /// Removes a mount configuration
-    /// </summary>
-    public void RemoveMount(string protocolScheme)
-    {
-        var mounts = Mounts;
-        if (mounts.Remove(protocolScheme))
-        {
-            Mounts = mounts; // persist
-        }
+        #pragma warning restore CS0612
     }
 
     /// <summary>
@@ -106,19 +145,20 @@ public class MountSettings : SettingsBase
     public void RenameMount(string currentProtocolScheme, string? newProtocolScheme = null, string? newMountName = null)
     {
         var mounts = Mounts;
-        if (mounts.TryGetValue(currentProtocolScheme, out var config))
+        var targetConfig = mounts.FirstOrDefault(m => m.ProtocolScheme == currentProtocolScheme);
+        if (targetConfig != null)
         {
             var finalProtocolScheme = newProtocolScheme ?? currentProtocolScheme;
-            var finalMountName = newMountName ?? config.MountName;
+            var finalMountName = newMountName ?? targetConfig.MountName;
 
             if (finalProtocolScheme != currentProtocolScheme)
             {
-                mounts.Remove(currentProtocolScheme);
-                config.ProtocolScheme = finalProtocolScheme;
+                mounts.Remove(targetConfig);
+                targetConfig.ProtocolScheme = finalProtocolScheme;
             }
 
-            config.MountName = finalMountName;
-            mounts[finalProtocolScheme] = config;
+            targetConfig.MountName = finalMountName;
+            mounts.Add(targetConfig);
             Mounts = mounts;
         }
     }
@@ -133,13 +173,13 @@ public class MountSettings : SettingsBase
         var visited = new HashSet<string>();
         var recursionStack = new HashSet<string>();
 
-        foreach (var mount in mounts.Values.OrderBy(m => m.CreatedAt))
+        foreach (var mount in mounts.OrderBy(m => m.CreatedAt))
         {
             if (!visited.Contains(mount.ProtocolScheme))
             {
                 if (VisitMount(mount.ProtocolScheme, visited, recursionStack, result, mounts))
                 {
-                    foreach (var remaining in mounts.Values.Where(m => !visited.Contains(m.ProtocolScheme)))
+                    foreach (var remaining in mounts.Where(m => !visited.Contains(m.ProtocolScheme)))
                     {
                         result.Add(remaining);
                         visited.Add(remaining.ProtocolScheme);
@@ -152,27 +192,35 @@ public class MountSettings : SettingsBase
         return result;
     }
 
-    private bool VisitMount(string protocolScheme, HashSet<string> visited, HashSet<string> recursionStack, 
-                           List<MountConfiguration> result, Dictionary<string, MountConfiguration> mounts)
+    private bool VisitMount(string protocolScheme, HashSet<string> visited, HashSet<string> recursionStack, List<MountConfiguration> result, List<MountConfiguration> mounts)
     {
         if (recursionStack.Contains(protocolScheme))
             return true;
+
         if (visited.Contains(protocolScheme))
             return false;
-        if (!mounts.TryGetValue(protocolScheme, out var config))
+
+        var config = mounts.FirstOrDefault(m => m.ProtocolScheme == protocolScheme);
+        if (config == null)
             return false;
+
         visited.Add(protocolScheme);
         recursionStack.Add(protocolScheme);
+
         foreach (var dependency in config.DependsOn)
         {
             if (VisitMount(dependency, visited, recursionStack, result, mounts))
                 return true;
         }
+
         recursionStack.Remove(protocolScheme);
         result.Add(config);
+
         return false;
     }
 
+    #pragma warning disable CS0612
     internal static string ResolveOriginalId(MountConfiguration config)
         => string.IsNullOrEmpty(config.OriginalStorableId) ? config.OriginalFolderId : config.OriginalStorableId;
+    #pragma warning restore CS0612
 }

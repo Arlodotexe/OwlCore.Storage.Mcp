@@ -7,6 +7,7 @@ namespace OwlCore.Storage.Mcp;
 /// </summary>
 [JsonSourceGenerationOptions(WriteIndented = true)]
 [JsonSerializable(typeof(Dictionary<string, MountConfiguration>))]
+[JsonSerializable(typeof(List<MountConfiguration>))]
 [JsonSerializable(typeof(MountConfiguration))]
 [JsonSerializable(typeof(List<string>))]
 [JsonSerializable(typeof(string))]
