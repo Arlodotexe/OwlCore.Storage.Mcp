@@ -142,24 +142,24 @@ public class MountSettings : SettingsBase
     /// <summary>
     /// Renames a mount configuration
     /// </summary>
-    public void RenameMount(string currentProtocolScheme, string? newProtocolScheme = null, string? newMountName = null)
+    public void RenameMount(string currentProtocolScheme, string originalStorableId, string? newProtocolScheme = null, string? newMountName = null)
     {
-        var mounts = Mounts;
-        var targetConfig = mounts.FirstOrDefault(m => m.ProtocolScheme == currentProtocolScheme);
+        // Match using normalized underlying IDs so alias forms in settings still match live mount IDs
+        var targetConfig = Mounts.FirstOrDefault(m => m.ProtocolScheme == currentProtocolScheme &&
+            ProtocolRegistry.ResolveAliasToFullId(ResolveOriginalId(m)).Equals(
+                ProtocolRegistry.ResolveAliasToFullId(originalStorableId), StringComparison.OrdinalIgnoreCase));
+
         if (targetConfig != null)
         {
+            // Either mount name or protocol scheme (or both) can be changed.
             var finalProtocolScheme = newProtocolScheme ?? currentProtocolScheme;
             var finalMountName = newMountName ?? targetConfig.MountName;
 
-            if (finalProtocolScheme != currentProtocolScheme)
-            {
-                mounts.Remove(targetConfig);
-                targetConfig.ProtocolScheme = finalProtocolScheme;
-            }
+            // Update protocol scheme if changed
+            targetConfig.ProtocolScheme = finalProtocolScheme;
 
+            // Update mount name if changed
             targetConfig.MountName = finalMountName;
-            mounts.Add(targetConfig);
-            Mounts = mounts;
         }
     }
 

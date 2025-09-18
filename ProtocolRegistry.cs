@@ -57,7 +57,7 @@ public static class ProtocolRegistry
         cancellationToken.ThrowIfCancellationRequested();
 
         // Already initialized
-        if (MountSettings != null!)
+        if (MountSettings != null)
             return;
 
         await InitializeSettingsAndRestoreMountsAsync(cancellationToken);
@@ -75,13 +75,13 @@ public static class ProtocolRegistry
             // Use a shared location for mount settings that syncs across MCP instances
             // Use the user's AppData\Roaming folder for cross-instance persistence
             var appDataPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-            var mcpSettingsPath = Path.Combine(appDataPath, "OwlCore", "Storage", "Mcp");
-            Directory.CreateDirectory(mcpSettingsPath);
-
-            var settingsFolder = new SystemFolder(new DirectoryInfo(mcpSettingsPath));
+            var appDataFolder = new SystemFolder(appDataPath);
+            var owlCoreFolder = (SystemFolder)await appDataFolder.CreateFolderAsync("OwlCore", overwrite: false, cancellationToken);
+            var storageFolder = (SystemFolder)await owlCoreFolder.CreateFolderAsync("Storage", overwrite: false, cancellationToken);
+            var mcpSettingsFolder = (SystemFolder)await storageFolder.CreateFolderAsync("Mcp", overwrite: false, cancellationToken);
 
             // Initialize mount settings
-            MountSettings = new MountSettings(settingsFolder);
+            MountSettings = new MountSettings(mcpSettingsFolder);
             await MountSettings.LoadAsync();
 
             // Restore mounts in dependency order
@@ -89,7 +89,7 @@ public static class ProtocolRegistry
             var restoredCount = 0;
             var failed = new List<string>();
 
-            Logger.LogInformation($"Found {mountsToRestore.Count} persisted mounts to restore from {mcpSettingsPath}");
+            Logger.LogInformation($"Found {mountsToRestore.Count} persisted mounts to restore from {mcpSettingsFolder.Path}");
 
             foreach (var cfg in mountsToRestore)
             {
@@ -431,7 +431,26 @@ public static class ProtocolRegistry
         _mountedFolders.TryRemove(protocolScheme, out _);
 
         // Remove from persistent settings
-        var targetConfig = MountSettings.Mounts.First(x => x.OriginalStorableId == mountedHandler?.MountedFolder.Id);
+        Logger.LogInformation($"Attempting to unmount protocol scheme: {protocolScheme}");
+        Logger.LogInformation($"Mounted handler: {mountedHandler}");
+        Logger.LogInformation($"Mounted folder ID: {mountedHandler?.MountedFolder.Id}");
+
+        // Find the persisted config for this scheme whose resolved original ID matches the mounted folder's ID
+        var candidates = MountSettings.Mounts.Where(m => m.ProtocolScheme == protocolScheme).ToList();
+        var targetConfig = candidates.FirstOrDefault(cfg =>
+        {
+            var storedOriginal = MountSettings.ResolveOriginalId(cfg);
+            var resolvedStored = ResolveAliasToFullId(storedOriginal);
+            return string.Equals(resolvedStored, mountedHandler?.MountedFolder.Id, StringComparison.OrdinalIgnoreCase);
+        });
+
+        if (targetConfig is null)
+        {
+            Logger.LogInformation($"No persisted mount configuration matched live mount for '{protocolScheme}'. Nothing to remove.");
+            return true; // The live mount is gone; treat as success even if settings couldn't be pruned
+        }
+
+        Logger.LogInformation($"Target config found: ProtocolScheme={targetConfig.ProtocolScheme}, OriginalStorableId={targetConfig.OriginalStorableId}");
         MountSettings.Mounts.Remove(targetConfig);
 
         return true;
@@ -448,10 +467,16 @@ public static class ProtocolRegistry
             StorableType mountType = StorableType.Folder;
             string originalId = string.Empty;
 
-            if (MountSettings != null && MountSettings.Mounts.FirstOrDefault(x => x.ProtocolScheme == h.ProtocolScheme) is { } cfg)
+            if (MountSettings != null)
             {
-                mountType = cfg.MountType;
-                originalId = MountSettings.ResolveOriginalId(cfg);
+                var configs = MountSettings.Mounts.Where(x => x.ProtocolScheme == h.ProtocolScheme).ToList();
+                if (configs.Count > 0)
+                {
+                    var match = configs.First(cfg => string.Equals(ResolveAliasToFullId(MountSettings.ResolveOriginalId(cfg)), h.MountedFolder.Id, StringComparison.OrdinalIgnoreCase));
+
+                    mountType = match.MountType;
+                    originalId = MountSettings.ResolveOriginalId(match);
+                }
             }
             return new
             {
@@ -549,24 +574,11 @@ public static class ProtocolRegistry
         var newRootUri = $"{finalProtocolScheme}://";
 
         // Perform atomic update
-        if (finalProtocolScheme != currentProtocolScheme)
-        {
-            // Protocol scheme is changing - need to update both registries
-            _protocolHandlers.TryRemove(currentProtocolScheme, out _);
-            _mountedFolders.TryRemove(currentProtocolScheme, out _);
-
-            _protocolHandlers[finalProtocolScheme] = newHandler;
-            _mountedFolders[finalProtocolScheme] = newHandler;
-        }
-        else
-        {
-            // Only display name is changing - update in place
             _protocolHandlers[currentProtocolScheme] = newHandler;
             _mountedFolders[currentProtocolScheme] = newHandler;
-        }
 
         // Update persistent settings
-        MountSettings.RenameMount(currentProtocolScheme, newProtocolScheme, newMountName);
+        MountSettings.RenameMount(currentProtocolScheme, currentHandler.MountedFolder.Id, newProtocolScheme, newMountName);
 
         return newRootUri;
     }
