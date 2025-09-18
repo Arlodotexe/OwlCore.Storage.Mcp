@@ -52,9 +52,9 @@ For **GitHub Copilot in VS Code** ([setup guide](https://code.visualstudio.com/d
 
 In both cases, you'll need this server config object:
 ```json
-"OwlCore.Storage": {
+"owlcore.storage": {
   "command": "dotnet",
-  "args": ["run", "--project", "/path/to/OwlCore.Storage.Mcp/"],
+  "args": ["run", "--project", "/path/to/OwlCore.Storage.Mcp/"]
 }
 ```
 
