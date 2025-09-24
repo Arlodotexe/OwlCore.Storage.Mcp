@@ -321,7 +321,7 @@ public static class StorageTools
         return driveInfos.ToArray();
     }
 
-    [McpServerTool, Description("Lists all items in a folder by ID or path. Returns array of items with their IDs, names, and types.")]
+    [McpServerTool, Description($"Lists all items in a folder by ID or path. Returns array of items with their IDs, names, and types. Use ${nameof(GetFolderFiles)} or {nameof(GetFolderSubfolders)} to filter by type. Prefer {nameof(GetItemByRelativePath)} for hierarchical or path-based navigation.")]
     public static async Task<object[]> GetFolderItems(string folderId)
     {
         var cancellationToken = CancellationToken.None;
