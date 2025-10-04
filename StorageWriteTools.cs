@@ -339,8 +339,21 @@ public static partial class StorageWriteTools
                 {
                     // Compute full relative path from source root to the file (includes the filename)
                     var relativePath = await sourceFolder.GetRelativePathToAsync((IStorableChild)file);
-                    // Let CreateRelativeFolderPathAsync ignore the filename and create only parent folders
-                    var destinationFolder = (IModifiableFolder)await targetFolder.CreateFolderByRelativePathAsync(relativePath, overwrite: false, CancellationToken.None);
+                    
+                    // Strip filename to get parent folder path only
+                    // CreateFolderByRelativePathAsync treats all segments as folders, including file-like names
+                    var parentPath = string.Empty;
+                    if (relativePath.Contains('/'))
+                    {
+                        var lastSlashIndex = relativePath.LastIndexOf('/');
+                        parentPath = relativePath.Substring(0, lastSlashIndex);
+                    }
+                    
+                    // Create parent folder structure (if any), otherwise use target root
+                    var destinationFolder = string.IsNullOrEmpty(parentPath)
+                        ? (IModifiableFolder)targetFolder
+                        : (IModifiableFolder)await targetFolder.CreateFolderByRelativePathAsync(parentPath, overwrite: false, CancellationToken.None);
+                    
                     await destinationFolder.CreateCopyOfAsync(file, overwrite);
                 }
 
@@ -430,7 +443,21 @@ public static partial class StorageWriteTools
                 await foreach (var file in new DepthFirstRecursiveFolder(sourceFolder).GetFilesAsync(CancellationToken.None))
                 {
                     var relativePath = await sourceFolder.GetRelativePathToAsync((IStorableChild)file);
-                    var destinationFolder = (IModifiableFolder)await targetFolder.CreateFolderByRelativePathAsync(relativePath, overwrite: false, CancellationToken.None);
+                    
+                    // Strip filename to get parent folder path only
+                    // CreateFolderByRelativePathAsync treats all segments as folders, including file-like names
+                    var parentPath = string.Empty;
+                    if (relativePath.Contains('/'))
+                    {
+                        var lastSlashIndex = relativePath.LastIndexOf('/');
+                        parentPath = relativePath.Substring(0, lastSlashIndex);
+                    }
+                    
+                    // Create parent folder structure (if any), otherwise use target root
+                    var destinationFolder = string.IsNullOrEmpty(parentPath)
+                        ? (IModifiableFolder)targetFolder
+                        : (IModifiableFolder)await targetFolder.CreateFolderByRelativePathAsync(parentPath, overwrite: false, CancellationToken.None);
+                    
                     await destinationFolder.CreateCopyOfAsync(file, overwrite);
                 }
 
