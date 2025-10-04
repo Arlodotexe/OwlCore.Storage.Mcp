@@ -665,7 +665,7 @@ public static class StorageTools
                 throw new McpException($"Invalid columnLimit: {columnLimit.Value}. Must be a positive integer, or null to disable the limit.", McpErrorCode.InvalidParams);
 
             var content = await file.ReadTextAsync(CancellationToken.None);
-            var lines = content.Split('\n');
+            var lines = content.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
             
             // Validate line numbers (1-based)
             if (startLine < 1 || startLine > lines.Length)

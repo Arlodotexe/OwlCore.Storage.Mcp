@@ -12,6 +12,21 @@ using SharpCompress.Common;
 
 namespace OwlCore.Storage.Mcp;
 
+/// <summary>
+/// Specifies how content should be written to a file.
+/// </summary>
+public enum WriteMode
+{
+    /// <summary>Insert content at the specified line without replacing existing content.</summary>
+    Insert,
+    
+    /// <summary>Replace content from startLine through endLine.</summary>
+    Replace,
+    
+    /// <summary>Replace content from startLine to the end of the file.</summary>
+    ReplaceToEnd
+}
+
 [McpServerToolType]
 public static partial class StorageWriteTools
 {
@@ -121,7 +136,15 @@ public static partial class StorageWriteTools
             if (!_storableRegistry.TryGetValue(fileId, out var item) || item is not IFile file)
                 throw new McpException($"File with ID '{fileId}' not found", McpErrorCode.InvalidParams);
 
-            await file.WriteTextAsync(content);
+            // Use OpenWriteAsync with SetLength(0) to ensure proper truncation
+            using (var stream = await file.OpenWriteAsync(cancellationToken))
+            {
+                stream.SetLength(0);  // Truncate old content
+                using var writer = new StreamWriter(stream, new UTF8Encoding(false), leaveOpen: false);
+                await writer.WriteAsync(content);
+                await writer.FlushAsync();
+            }
+            
             return $"Successfully wrote {content.Length} characters to file '{file.Name}'";
         }
         catch (McpException)
@@ -135,7 +158,7 @@ public static partial class StorageWriteTools
     }
 
     [McpServerTool, Description("Writes text content to a specific line range in a file (1-based indexing). To INSERT or APPEND content at startLine, omit endLine parameter entirely. To REPLACE lines startLine through endLine, provide both parameters. Do NOT use endLine=0, use null or omit it.")]
-    public static async Task<string> WriteFileTextRange(string fileId, string content, int startLine, int? endLine = null)
+    public static async Task<string> WriteFileTextRange(string fileId, string content, int startLine, WriteMode mode = WriteMode.Insert, int? endLine = null)
     {
         var cancellationToken = CancellationToken.None;
         await StorageTools.EnsureStorableRegistered(fileId, cancellationToken);
@@ -143,18 +166,32 @@ public static partial class StorageWriteTools
         if (!_storableRegistry.TryGetValue(fileId, out var item) || item is not IFile file)
             throw new McpException($"File with ID '{fileId}' not found", McpErrorCode.InvalidParams);
 
-        // Explicitly reject endLine of 0 since it's invalid (1-based indexing)
+        // Validate mode and endLine combination
+        if (mode == WriteMode.Replace && !endLine.HasValue)
+            throw new McpException($"endLine is required when mode is Replace", McpErrorCode.InvalidParams);
+        
+        if (mode != WriteMode.Replace && endLine.HasValue)
+            throw new McpException($"endLine should only be provided when mode is Replace (current mode: {mode})", McpErrorCode.InvalidParams);
+        
         if (endLine.HasValue && endLine.Value <= 0)
-            throw new McpException($"Invalid endLine value: {endLine.Value}. endLine must be >= 1 (1-based indexing) or null for insertion. To insert or append content, omit endLine parameter entirely.", McpErrorCode.InvalidParams);
+            throw new McpException($"Invalid endLine value: {endLine.Value}. endLine must be >= 1 (1-based indexing)", McpErrorCode.InvalidParams);
 
         var originalContent = await file.ReadTextAsync(CancellationToken.None);
-        var lines = originalContent.Split('\n');
+        var lines = originalContent.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
         
         // Validate line numbers (1-based)
         if (startLine < 1 || startLine > lines.Length + 1)
             throw new McpException($"Invalid startLine: {startLine}. Must be between 1 and {lines.Length + 1} (file has {lines.Length} lines)", McpErrorCode.InvalidParams);
         
-        int actualEndLine = endLine ?? startLine - 1; // If no endLine, insert before startLine
+        // Calculate the actual end line based on mode
+        int actualEndLine = mode switch
+        {
+            WriteMode.Insert => startLine - 1,                          // Insert before startLine
+            WriteMode.Replace => endLine.GetValueOrDefault(),           // Replace through specified endLine (validated above)
+            WriteMode.ReplaceToEnd => lines.Length,                     // Replace to end of file
+            _ => throw new McpException($"Unknown WriteMode: {mode}", McpErrorCode.InternalError)
+        };
+        
         if (actualEndLine < startLine - 1 || actualEndLine > lines.Length)
             throw new McpException($"Invalid endLine range: {actualEndLine}. Must be between {startLine - 1} and {lines.Length}", McpErrorCode.InvalidParams);
 
@@ -165,28 +202,32 @@ public static partial class StorageWriteTools
         newLines.AddRange(lines[0..(startLine - 1)]);
         
         // Add the new content (split into lines if it contains line breaks)
-        var newContentLines = content.Split('\n');
+        var newContentLines = content.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
         newLines.AddRange(newContentLines);
         
-        // Add lines after the range
+        // Add lines after the replaced range
         if (actualEndLine < lines.Length)
             newLines.AddRange(lines[actualEndLine..]);
-
-        var finalContent = string.Join('\n', newLines);
-        await file.WriteTextAsync(finalContent);
-
-        if (endLine.HasValue)
+        
+        var finalContent = string.Join(Environment.NewLine, newLines);
+        
+        // Use OpenWriteAsync with SetLength(0) to ensure proper truncation
+        using (var stream = await file.OpenWriteAsync(cancellationToken))
         {
-            var linesReplaced = actualEndLine - startLine + 1;
-            var linesAdded = newContentLines.Length;
-            return $"Successfully replaced {linesReplaced} line(s) (lines {startLine}-{actualEndLine}) with {linesAdded} line(s) in file '{file.Name}'. " +
-                   $"Original content: {originalContent.Length} characters, New content: {finalContent.Length} characters";
+            stream.SetLength(0);  // Truncate old content
+            using var writer = new StreamWriter(stream, new UTF8Encoding(false), leaveOpen: false);
+            await writer.WriteAsync(finalContent);
+            await writer.FlushAsync();
         }
-        else
+
+        // Return mode-aware message
+        return mode switch
         {
-            return $"Successfully inserted {newContentLines.Length} line(s) at line {startLine} in file '{file.Name}'. " +
-                   $"Original: {originalContent.Length} characters, New: {finalContent.Length} characters";
-        }
+            WriteMode.Insert => $"Successfully inserted {newContentLines.Length} line(s) at line {startLine} in file '{file.Name}'. Original: {originalContent.Length} characters, New: {finalContent.Length} characters",
+            WriteMode.Replace => $"Successfully replaced {actualEndLine - startLine + 1} line(s) (lines {startLine}-{actualEndLine}) with {newContentLines.Length} line(s) in file '{file.Name}'. Original: {originalContent.Length} characters, New: {finalContent.Length} characters",
+            WriteMode.ReplaceToEnd => $"Successfully replaced {actualEndLine - startLine + 1} line(s) (lines {startLine} to EOF) with {newContentLines.Length} line(s) in file '{file.Name}'. Original: {originalContent.Length} characters, New: {finalContent.Length} characters",
+            _ => throw new McpException($"Unknown WriteMode: {mode}", McpErrorCode.InternalError)
+        };
     }
 
     [McpServerTool, Description("Writes text content to a file with specified encoding by file ID or path.")]
