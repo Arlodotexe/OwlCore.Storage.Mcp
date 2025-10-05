@@ -24,6 +24,12 @@ public class MountConfiguration
 
     // For archive mounts we store StorableType.File (the folder presentation is implicit once mounted).
     public StorableType MountType { get; set; } = StorableType.Folder;
+
+    /// <summary>
+    /// The protocol scheme of the browseable root that the OriginalStorableId belongs to (e.g., "mfs").
+    /// Used during mount restoration to get the correct protocol handler's root for navigation.
+    /// </summary>
+    public string? BrowsableRootProtocolScheme { get; set; } = null;
 }
 
 /// <summary>
@@ -68,7 +74,7 @@ public class MountSettings : SettingsBase
     /// <summary>
     /// Adds or updates a mount configuration (generalized for any storable)
     /// </summary>
-    public void AddOrUpdateMount(string protocolScheme, string originalStorableId, string mountName, StorableType mountType)
+    public void AddOrUpdateMount(string protocolScheme, string originalStorableId, string mountName, StorableType mountType, string? browsableRootProtocolScheme = null)
     {
         var dependsOn = new List<string>();
         var scheme = ProtocolRegistry.ExtractScheme(originalStorableId);
@@ -86,6 +92,7 @@ public class MountSettings : SettingsBase
             CreatedAt = DateTime.UtcNow,
             DependsOn = dependsOn,
             MountType = mountType,
+            BrowsableRootProtocolScheme = browsableRootProtocolScheme,
         });
         Mounts = mounts; // persist
     }

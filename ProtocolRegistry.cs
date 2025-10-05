@@ -98,16 +98,49 @@ public static class ProtocolRegistry
                 try
                 {
                     var originalId = MountSettings.ResolveOriginalId(cfg);
-                    if (!await TryRegisterStorableAsync(originalId, cancellationToken))
+                    IStorable? storable = null;
+                    
+                    // If we have browsable root protocol scheme, use it to get root and navigate
+                    if (!string.IsNullOrEmpty(cfg.BrowsableRootProtocolScheme))
                     {
-                        failed.Add($"{cfg.ProtocolScheme} (not accessible)");
-                        continue;
-                    }
+                        // Get the protocol handler for the browsable root
+                        if (_protocolHandlers.TryGetValue(cfg.BrowsableRootProtocolScheme, out var browsableHandler) && browsableHandler.HasBrowsableRoot)
+                        {
+                            try
+                            {
+                                // Get the root from the handler
+                                var browsableRootUri = $"{cfg.BrowsableRootProtocolScheme}://";
+                                var root = await browsableHandler.CreateRootAsync(browsableRootUri, cancellationToken);
 
-                    if (!StorageTools._storableRegistry.TryGetValue(originalId, out var storable))
+                                if (root is IFolder rootFolder)
+                                {
+                                    // Navigate from root to the item by ID recursively
+                                    storable = await rootFolder.GetItemRecursiveAsync(originalId, cancellationToken);
+                                    StorageTools._storableRegistry[originalId] = storable;
+                                }
+                            }
+                            catch
+                            {
+                                // Navigation failed, try direct registration fallback
+                                storable = null;
+                            }
+                        }
+                    }
+                    
+                    // Fallback: try direct registration (for backward compatibility or if browsable root unavailable)
+                    if (storable == null)
                     {
-                        failed.Add($"{cfg.ProtocolScheme} (not registered)");
-                        continue;
+                        if (!await TryRegisterStorableAsync(originalId, cancellationToken))
+                        {
+                            failed.Add($"{cfg.ProtocolScheme} (not accessible)");
+                            continue;
+                        }
+                        
+                        if (!StorageTools._storableRegistry.TryGetValue(originalId, out storable))
+                        {
+                            failed.Add($"{cfg.ProtocolScheme} (not registered)");
+                            continue;
+                        }
                     }
 
                     IFolder? folder = null;
@@ -249,7 +282,7 @@ public static class ProtocolRegistry
     /// <summary>
     /// Generalized mounting: accepts either an IFolder or supported archive IFile. Replaces MountFolder internally.
     /// </summary>
-    public static string MountStorable(IStorable storable, string protocolScheme, string mountName, string? originalId = null)
+    public static async Task<string> MountStorable(IStorable storable, string protocolScheme, string mountName, string? originalId = null)
     {
         if (string.IsNullOrWhiteSpace(protocolScheme)) throw new ArgumentException("Protocol scheme cannot be null or empty", nameof(protocolScheme));
         if (string.IsNullOrWhiteSpace(mountName)) throw new ArgumentException("Mount name cannot be null or empty", nameof(mountName));
@@ -290,7 +323,67 @@ public static class ProtocolRegistry
         StorageTools._storableRegistry[rootUri] = folderToMount;
 
         var idToStore = originalId ?? (storable is IStorableChild sc ? sc.Id : storable.Id);
-        MountSettings.AddOrUpdateMount(protocolScheme, idToStore, mountName, mountType);
+
+        // Detect browsable root protocol scheme by finding which handler's root matches this storable's root
+        string? browsableRootProtocolScheme = null;
+
+        if (storable is IStorableChild storableChild)
+        {
+            try
+            {
+                // Get the root of the storable being mounted
+                var storableRoot = await storableChild.GetRootAsync(CancellationToken.None);
+                
+                if (storableRoot != null)
+                {
+                    Logger.LogInformation($"[MountStorable] Storable root ID: {storableRoot.Id}");
+                    
+                    // Iterate through protocol handlers to find which one has a matching root
+                    foreach (var (scheme, protocolHandler) in _protocolHandlers)
+                    {
+                        // Skip mounted folders - they're not browsable roots
+                        if (protocolHandler is MountedFolderProtocolHandler) continue;
+                        
+                        // Only check handlers with browsable roots
+                        if (!protocolHandler.HasBrowsableRoot) continue;
+                        
+                        try
+                        {
+                            var candidateRootUri = $"{scheme}://";
+                            var candidateRoot = await protocolHandler.CreateRootAsync(candidateRootUri, CancellationToken.None);
+                            
+                            // If the IDs match, this handler is responsible for the storable's root
+                            if (candidateRoot != null && candidateRoot.Id == storableRoot.Id)
+                            {
+                                browsableRootProtocolScheme = scheme;
+                                Logger.LogInformation($"[MountStorable] Found browsable root protocol by ID match: {scheme}");
+                                break;
+                            }
+                        }
+                        catch
+                        {
+                            // Handler couldn't create root, skip
+                            continue;
+                        }
+                    }
+                }
+                else
+                {
+                    Logger.LogInformation($"[MountStorable] Storable root is null, cannot detect browsable root protocol");
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning($"[MountStorable] Failed to detect browsable root protocol: {ex.Message}");
+            }
+        }
+        else
+        {
+            Logger.LogInformation($"[MountStorable] Storable is not IStorableChild, cannot detect browsable root protocol");
+        }
+
+        Logger.LogInformation($"[MountStorable] Final BrowsableRootProtocolScheme: {browsableRootProtocolScheme ?? "null"}");
+        MountSettings.AddOrUpdateMount(protocolScheme, idToStore, mountName, mountType, browsableRootProtocolScheme);
 
         if (mountType == StorableType.File)
             _mountedOriginalIds[idToStore] = protocolScheme;
@@ -306,7 +399,7 @@ public static class ProtocolRegistry
     /// <param name="originalFolderId">The original folder ID to preserve in settings (optional)</param>
     /// <returns>The root URI for the mounted folder</returns>
     /// <exception cref="ArgumentException">Thrown if the protocol scheme is already registered</exception>
-    public static string MountFolder(IFolder folder, string protocolScheme, string mountName, string? originalFolderId = null)
+    public static Task<string> MountFolder(IFolder folder, string protocolScheme, string mountName, string? originalFolderId = null)
         => MountStorable(folder, protocolScheme, mountName, originalFolderId);
 
     /// <summary>

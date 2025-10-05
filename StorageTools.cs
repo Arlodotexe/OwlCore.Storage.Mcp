@@ -937,7 +937,7 @@ public static class StorageTools
             if (registeredItem is not IFolder && registeredItem is not IFile)
                 throw new McpException("Item must be either a folder or file", McpErrorCode.InvalidParams);
 
-            var rootUri = ProtocolRegistry.MountStorable(registeredItem, protocolScheme, mountName, folderId);
+            var rootUri = await ProtocolRegistry.MountStorable(registeredItem, protocolScheme, mountName, folderId);
 
             // Removed explicit registration of rootUri to avoid forcing a specific representation.
             // Root folder (including archive wrapper) will be created lazily on first access via EnsureStorableRegistered.
