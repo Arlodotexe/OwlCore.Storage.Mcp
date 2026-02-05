@@ -15,6 +15,8 @@ using OwlCore.Diagnostics;
 using OwlCore.Kubo;
 using Ipfs.Http;
 using OwlCore.Extensions;
+using Ipfs;
+using Ipfs.CoreApi;
 
 var startTime = DateTime.Now;
 
@@ -102,7 +104,7 @@ AppDomain.CurrentDomain.UnhandledException += (object sender, UnhandledException
 // Set up KuboBootstrapper and IpfsClient
 var userProfileFolder = new SystemFolder(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
 var kuboRepoFolder = (SystemFolder)await userProfileFolder.CreateFolderAsync(".ipfs", overwrite: false, cancellationToken);
-var kubo = new KuboBootstrapper(kuboRepoFolder.Path, new Version(0, 37, 0))
+var kubo = new KuboBootstrapper(kuboRepoFolder.Path, new Version(0, 39, 0))
 {
     BinaryWorkingFolder = ocKuboFolder,
     LaunchConflictMode = BootstrapLaunchConflictMode.Attach,
@@ -214,6 +216,72 @@ public static class FileLauncherTool
         catch (Exception ex)
         {
             throw new McpException($"Failed to start file '{filePath}': {ex.Message}", ex, McpErrorCode.InternalError);
+        }
+    }
+}
+
+[McpServerToolType]
+public static class IpfsGetCidTool
+{
+    [McpServerTool, Description("Gets the Content Identifier (CID) for a file or folder. If the item isn't already addressable in IPFS, it will be added using provided options.")]
+    public static async Task<string> GetCidAsync(string fileId, bool? allowAdd = null, bool? pin = null, bool? onlyHash = null, int? cidVersion = null, bool? noCopy = null, bool? fsCache = null)
+    {
+        try
+        {
+            // Resolve protocol aliases to actual file paths
+            var resolvedPath = ProtocolRegistry.ResolveAliasToFullId(fileId);
+
+            // Get the storable item
+            var item = StorageTools._storableRegistry.TryGetValue(resolvedPath, out var storable) ? storable : throw new McpException($"File not found: '{fileId}'", McpErrorCode.InvalidParams);
+
+            // Account for known implementations that use GetCidAsync wrappers to add support.
+            {
+                // System.IO
+                if (item is not IAddFileToGetCid && item is SystemFile systemFile)
+                    item = new ContentAddressedSystemFile(systemFile.Path, ProtocolRegistry.IpfsClient);
+
+                if (item is not IAddFileToGetCid && item is SystemFolder systemFolder)
+                    item = new ContentAddressedSystemFolder(systemFolder.Path, ProtocolRegistry.IpfsClient);
+            }
+
+            // Create AddFileOptions if needed (only for items requiring IPFS add)
+            if (item is IAddFileToGetCid && allowAdd != true && noCopy != true && onlyHash != true)
+                throw new McpException($"This operation requires adding data to the IPFS blockstore, but allowAdd is false. User must be aware that this will take additional disk space and they must proactively request or reactively approve those implications. If they haven't done explicitly this already, ask them now.", McpErrorCode.InvalidParams);
+
+            AddFileOptions? addOptions = null;
+            if (allowAdd != true && (pin.HasValue || onlyHash.HasValue || cidVersion.HasValue || noCopy.HasValue || fsCache.HasValue))
+            {
+                addOptions = new AddFileOptions
+                {
+                    Pin = pin,
+                    OnlyHash = onlyHash,
+                    CidVersion = cidVersion,
+                    NoCopy = noCopy,
+                    FsCache = fsCache
+                };
+            }
+
+            // Get CID using OwlCore.Kubo extension method            
+            Cid cid;
+            try
+            {
+                // Try parameterless overload first (for MFS, IPNS, etc.)
+                cid = await item.GetCidAsync(ProtocolRegistry.IpfsClient, addOptions ?? new AddFileOptions(), CancellationToken.None);
+            }
+            catch (NotSupportedException)
+            {
+                throw new McpException($"Item requires adding data to IPFS but allowAdd is false", McpErrorCode.InvalidParams);
+            }
+
+            return cid.ToString();
+        }
+        catch (McpException)
+        {
+            throw; // Re-throw MCP exceptions as-is
+        }
+        catch (Exception ex)
+        {
+            throw new McpException($"Failed to get CID for '{fileId}': {ex.Message}", ex, McpErrorCode.InternalError);
         }
     }
 }
