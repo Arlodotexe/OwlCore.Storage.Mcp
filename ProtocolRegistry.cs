@@ -12,6 +12,7 @@ using OwlCore.Storage.SharpCompress;
 using SharpCompress.Archives;
 using OwlCore.Diagnostics;
 using Ipfs.Http;
+using Ipfs.CoreApi;
 
 namespace OwlCore.Storage.Mcp;
 
@@ -34,6 +35,8 @@ public static class ProtocolRegistry
         if (_isInitialized)
             return;
 
+        IpfsClient = ipfsClient;
+
         // Register built-in protocol handlers
         RegisterProtocol("mfs", new IpfsMfsProtocolHandler(ipfsClient));
         RegisterProtocol("http", new HttpProtocolHandler());
@@ -47,6 +50,11 @@ public static class ProtocolRegistry
 
         _isInitialized = true;
     }
+
+    /// <summary>
+    /// The client to use for communicating with ipfs.
+    /// </summary>
+    public static ICoreApi IpfsClient { get; set; }
 
     /// <summary>
     /// Ensures mount settings are initialized and mounts are restored
