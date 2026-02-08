@@ -584,8 +584,9 @@ public static class StorageTools
                 if (nameRegex != null && !nameRegex.IsMatch(item.Name))
                     continue;
 
-                // Register the item
-                string itemId = ProtocolRegistry.IsCustomProtocol(folderId) ? CreateCustomItemId(folderId, item.Name) : item.Id;
+                // Register the item using its real ID — unlike flat folder listings,
+                // recursive results may be many levels deep, so we can't assume parentId == folderId.
+                string itemId = item.Id;
                 _storableRegistry[itemId] = item;
                 string externalId = ProtocolRegistry.SubstituteWithMountAlias(itemId);
                 if (externalId != itemId)
