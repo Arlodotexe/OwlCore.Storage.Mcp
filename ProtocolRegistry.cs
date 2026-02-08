@@ -563,32 +563,64 @@ public static class ProtocolRegistry
     /// <returns>Array of mounted folder information</returns>
     public static object[] GetMountedFolders()
     {
-        return _mountedFolders.Values.Select(h =>
+        var results = new List<object>();
+        foreach (var h in _mountedFolders.Values)
         {
-            StorableType mountType = StorableType.Folder;
-            string originalId = string.Empty;
-
-            if (MountSettings != null)
+            try
             {
-                var configs = MountSettings.Mounts.Where(x => x.ProtocolScheme == h.ProtocolScheme).ToList();
-                if (configs.Count > 0)
+                StorableType mountType = StorableType.Folder;
+                string originalId = string.Empty;
+
+                if (MountSettings != null)
                 {
-                    var match = configs.First(cfg => string.Equals(ResolveAliasToFullId(MountSettings.ResolveOriginalId(cfg)), h.MountedFolder.Id, StringComparison.OrdinalIgnoreCase));
+                    var configs = MountSettings.Mounts.Where(x => x.ProtocolScheme == h.ProtocolScheme).ToList();
+                    if (configs.Count > 0)
+                    {
+                        var match = configs.FirstOrDefault(cfg =>
+                        {
+                            try
+                            {
+                                return string.Equals(ResolveAliasToFullId(MountSettings.ResolveOriginalId(cfg)), h.MountedFolder.Id, StringComparison.OrdinalIgnoreCase);
+                            }
+                            catch
+                            {
+                                return false;
+                            }
+                        });
 
-                    mountType = match.MountType;
-                    originalId = MountSettings.ResolveOriginalId(match);
+                        if (match != null)
+                        {
+                            mountType = match.MountType;
+                            originalId = MountSettings.ResolveOriginalId(match);
+                        }
+                    }
                 }
+                results.Add(new
+                {
+                    protocolScheme = h.ProtocolScheme,
+                    mountName = h.MountName,
+                    rootUri = $"{h.ProtocolScheme}://",
+                    folderType = h.MountedFolder.GetType().Name,
+                    mountType,
+                    originalId
+                });
             }
-            return new
+            catch (Exception ex)
             {
-                protocolScheme = h.ProtocolScheme,
-                mountName = h.MountName,
-                rootUri = $"{h.ProtocolScheme}://",
-                folderType = h.MountedFolder.GetType().Name,
-                mountType,
-                originalId
-            };
-        }).ToArray();
+                Logger.LogInformation($"Failed to get info for mounted folder '{h.ProtocolScheme}': {ex.Message}");
+                // Still include the mount with basic info so it's visible
+                results.Add(new
+                {
+                    protocolScheme = h.ProtocolScheme,
+                    mountName = h.MountName,
+                    rootUri = $"{h.ProtocolScheme}://",
+                    folderType = h.MountedFolder.GetType().Name,
+                    mountType = StorableType.Folder,
+                    originalId = string.Empty
+                });
+            }
+        }
+        return results.ToArray();
     }
 
     /// <summary>

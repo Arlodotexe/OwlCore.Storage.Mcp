@@ -277,10 +277,17 @@ public static class StorageTools
 
         // Add mounted folders
         await ProtocolRegistry.EnsureInitializedAsync(cancellationToken);
-        var mountedFolders = ProtocolRegistry.GetMountedFolders();
-        foreach (var mount in mountedFolders)
+        try
         {
-            driveInfos.Add(mount);
+            var mountedFolders = ProtocolRegistry.GetMountedFolders();
+            foreach (var mount in mountedFolders)
+            {
+                driveInfos.Add(mount);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogInformation($"Failed to get mounted folders: {ex.Message}");
         }
 
         // Add custom protocol roots (only for protocols that have browsable roots and aren't mounted folders)
