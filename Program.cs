@@ -102,7 +102,7 @@ AppDomain.CurrentDomain.UnhandledException += (object sender, UnhandledException
 // Set up KuboBootstrapper and IpfsClient
 var userProfileFolder = new SystemFolder(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
 var kuboRepoFolder = (SystemFolder)await userProfileFolder.CreateFolderAsync(".ipfs", overwrite: false, cancellationToken);
-var kubo = new KuboBootstrapper(kuboRepoFolder.Path, new Version(0, 37, 0))
+var kubo = new KuboBootstrapper(kuboRepoFolder.Path)
 {
     BinaryWorkingFolder = ocKuboFolder,
     LaunchConflictMode = BootstrapLaunchConflictMode.Attach,

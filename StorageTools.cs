@@ -613,7 +613,7 @@ public static class StorageTools
         }
     }
 
-    //[McpServerTool, Description("Reads the content of a file as text with specified encoding. Works with both browseable (local storage, memory, ipfs, ipns, mfs) and non-browseable (http, https) supported protocols.")]
+    [McpServerTool, Description("Reads the content of a file as text with specified encoding. Works with both browseable (local storage, memory, ipfs, ipns, mfs) and non-browseable (http, https) supported protocols.")]
     public static async Task<string> ReadFileAsText([Description("The ID of the file to read.")] string fileId, string encoding = "UTF-8")
     {
         var cancellationToken = CancellationToken.None;
