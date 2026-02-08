@@ -6,6 +6,7 @@ using OwlCore.Storage.System.IO;
 using OwlCore.Diagnostics;
 using System.Collections.Concurrent;
 using System.Text;
+using System.Text.RegularExpressions;
 using Ipfs.Http;
 using CommunityToolkit.Diagnostics;
 
@@ -510,6 +511,182 @@ public static class StorageTools
         {
             throw new McpException($"Failed to find item '{targetItemId}' recursively in '{folderId}': {ex.Message}", ex, McpErrorCode.InternalError);
         }
+    }
+
+
+    [McpServerTool, Description("Searches for files and folders by name pattern within a folder hierarchy. Uses depth-first recursive traversal. Supports glob patterns (e.g., '*.cs', 'src/**/*.json') and regex patterns.")]
+    public static async Task<object[]> FindAll(
+        [Description("The ID of the folder to search within.")] string folderId,
+        [Description("Glob pattern to match against item names. Use '*' for any chars, '?' for single char, '**/' for recursive directory match. Examples: '*.cs', 'test_*', '**/*.json'.")] string? nameGlob = null,
+        [Description("Regex pattern to search within file contents. Only files are content-searched. Matched lines are returned with line numbers.")] string? contentRegex = null,
+        [Description("What to search for: 'all' (default), 'file', or 'folder'.")] string itemType = "all",
+        [Description("Maximum number of results to return. Default 100.")] int maxResults = 100)
+    {
+        var cancellationToken = CancellationToken.None;
+        try
+        {
+            if (string.IsNullOrWhiteSpace(folderId))
+                throw new McpException("Folder ID cannot be empty", McpErrorCode.InvalidParams);
+            if (string.IsNullOrWhiteSpace(nameGlob) && string.IsNullOrWhiteSpace(contentRegex))
+                throw new McpException("At least one of 'nameGlob' or 'contentRegex' must be provided.", McpErrorCode.InvalidParams);
+            if (maxResults <= 0)
+                throw new McpException("maxResults must be a positive integer", McpErrorCode.InvalidParams);
+
+            folderId = NormalizeInboundExternalId(folderId);
+            await EnsureStorableRegistered(folderId, cancellationToken);
+
+            if (!_storableRegistry.TryGetValue(folderId, out var registeredItem) || registeredItem is not IFolder folder)
+                throw new McpException($"Folder with ID '{folderId}' not found", McpErrorCode.InvalidParams);
+
+            // Build name glob regex
+            Regex? nameRegex = null;
+            if (!string.IsNullOrWhiteSpace(nameGlob))
+            {
+                try
+                {
+                    nameRegex = new Regex(GlobToRegex(nameGlob), RegexOptions.IgnoreCase | RegexOptions.Compiled);
+                }
+                catch (ArgumentException ex)
+                {
+                    throw new McpException($"Invalid glob pattern '{nameGlob}': {ex.Message}", McpErrorCode.InvalidParams);
+                }
+            }
+
+            // Build content regex
+            Regex? contentRegexCompiled = null;
+            if (!string.IsNullOrWhiteSpace(contentRegex))
+            {
+                try
+                {
+                    contentRegexCompiled = new Regex(contentRegex, RegexOptions.IgnoreCase | RegexOptions.Compiled);
+                }
+                catch (ArgumentException ex)
+                {
+                    throw new McpException($"Invalid content regex '{contentRegex}': {ex.Message}", McpErrorCode.InvalidParams);
+                }
+            }
+
+            // Determine StorableType filter
+            var storableType = itemType.ToLowerInvariant() switch
+            {
+                "all" => StorableType.All,
+                "file" => StorableType.File,
+                "folder" => StorableType.Folder,
+                _ => throw new McpException($"Invalid itemType '{itemType}'. Use 'all', 'file', or 'folder'.", McpErrorCode.InvalidParams)
+            };
+
+            var recursive = new DepthFirstRecursiveFolder(folder);
+            var results = new List<object>();
+
+            await foreach (var item in recursive.GetItemsAsync(storableType, cancellationToken))
+            {
+                // Name filter
+                if (nameRegex != null && !nameRegex.IsMatch(item.Name))
+                    continue;
+
+                // Register the item
+                string itemId = ProtocolRegistry.IsCustomProtocol(folderId) ? CreateCustomItemId(folderId, item.Name) : item.Id;
+                _storableRegistry[itemId] = item;
+                string externalId = ProtocolRegistry.SubstituteWithMountAlias(itemId);
+                if (externalId != itemId)
+                    _storableRegistry[externalId] = item;
+
+                var typeStr = item switch
+                {
+                    IFile => "file",
+                    IFolder => "folder",
+                    _ => "unknown"
+                };
+
+                // Content filter (files only)
+                if (contentRegexCompiled != null && item is IFile file)
+                {
+                    try
+                    {
+                        var content = await file.ReadTextAsync(CancellationToken.None);
+                        var lines2 = content.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
+                        var matches = new List<object>();
+
+                        for (int i = 0; i < lines2.Length; i++)
+                        {
+                            if (contentRegexCompiled.IsMatch(lines2[i]))
+                                matches.Add(new { line = i + 1, text = lines2[i].TrimEnd() });
+                        }
+
+                        if (matches.Count == 0)
+                            continue;
+
+                        results.Add(new { id = externalId, name = item.Name, type = typeStr, matches });
+                    }
+                    catch
+                    {
+                        continue; // Skip files that can't be read as text
+                    }
+                }
+                else if (contentRegexCompiled != null && item is not IFile)
+                {
+                    continue; // Content search requested but item is a folder
+                }
+                else
+                {
+                    results.Add(new { id = externalId, name = item.Name, type = typeStr });
+                }
+
+                if (results.Count >= maxResults)
+                    break;
+            }
+
+            return results.ToArray();
+        }
+        catch (McpException) { throw; }
+        catch (Exception ex)
+        {
+            throw new McpException($"Failed to search in '{folderId}': {ex.Message}", ex, McpErrorCode.InternalError);
+        }
+    }
+
+    /// <summary>
+    /// Converts a glob pattern to a regex pattern.
+    /// Supports: * (any chars except separator), ? (single char), **/ (recursive directory match).
+    /// </summary>
+    private static string GlobToRegex(string glob)
+    {
+        var sb = new StringBuilder("^");
+        int i = 0;
+        while (i < glob.Length)
+        {
+            char c = glob[i];
+            if (c == '*')
+            {
+                // Check for **/ or ** (recursive match — matches everything including separators)
+                if (i + 1 < glob.Length && glob[i + 1] == '*')
+                {
+                    i += 2;
+                    // skip optional following / or backslash
+                    if (i < glob.Length && (glob[i] == '/' || glob[i] == '\\'))
+                        i++;
+                    sb.Append(".*");
+                }
+                else
+                {
+                    // Single * — match any characters (name matching, no separator restriction needed)
+                    sb.Append(".*");
+                    i++;
+                }
+            }
+            else if (c == '?')
+            {
+                sb.Append('.');
+                i++;
+            }
+            else
+            {
+                sb.Append(Regex.Escape(c.ToString()));
+                i++;
+            }
+        }
+        sb.Append('$');
+        return sb.ToString();
     }
 
     [McpServerTool, Description("Navigates to an item using a relative path from a starting item.")]
