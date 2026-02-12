@@ -31,7 +31,9 @@ public class IpfsMfsProtocolHandler : IProtocolHandler
 
     public string CreateItemId(string parentId, string itemName)
     {
-        return parentId == "mfs://" ? $"mfs://{itemName}" : $"{parentId}/{itemName}";
+        if (parentId == "mfs://") return $"mfs://{itemName}";
+        if (parentId.EndsWith("/")) return $"{parentId}{itemName}";
+        return $"{parentId}/{itemName}";
     }
 
     public async Task<object?> GetDriveInfoAsync(string rootUri, CancellationToken cancellationToken = default)

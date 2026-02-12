@@ -19,6 +19,17 @@ public static class StorageTools
     private static volatile bool _isInitialized = false;
     private static readonly SemaphoreSlim _initializationSemaphore = new(1, 1);
     
+    /// <summary>
+    /// Ensures folder IDs consistently end with a trailing slash.
+    /// File IDs are returned unchanged.
+    /// </summary>
+    internal static string EnsureFolderTrailingSlash(string id, IStorable item)
+    {
+        if (item is IFolder && !id.EndsWith("/"))
+            return id + "/";
+        return id;
+    }
+
     // Issue003: inbound canonicalization for browsable protocols only (filesystem-like); resource protocols keep original form.
     private static string NormalizeInboundExternalId(string id)
     {
@@ -132,6 +143,17 @@ public static class StorageTools
         // Handle regular filesystem paths first (fast path)
         if (Directory.Exists(registrationId))
         {
+            // Check for ambiguity: this native ID may also be the root of a protocol or mount.
+            // If so, the model should use the protocol alias instead of the raw path.
+            var aliases = ProtocolRegistry.GetAllAliasesForNativeId(registrationId);
+            if (aliases.Count > 0)
+            {
+                throw new InvalidOperationException(
+                    $"Ambiguous ID '{registrationId}': this path is also the underlying root of {aliases.Count} protocol(s). " +
+                    $"Use the protocol alias instead: {string.Join(", ", aliases.Select(a => $"'{a}'"))}. " +
+                    $"These aliases disambiguate between storage implementations that share the same native ID.");
+            }
+
             var folder = new SystemFolder(new DirectoryInfo(registrationId));
             _storableRegistry[registrationId] = folder;
             if (id != registrationId)
@@ -358,6 +380,8 @@ public static class StorageTools
                 string externalId = ProtocolRegistry.SubstituteWithMountAlias(itemId);
                 if (externalId != itemId)
                     _storableRegistry[externalId] = item;
+                externalId = EnsureFolderTrailingSlash(externalId, item);
+                _storableRegistry[externalId] = item;
                 items.Add(new { id = externalId, name = item.Name, type = item switch { IFile => "file", IFolder => "folder", _ => "unknown" } });
             }
             return items.ToArray();
@@ -393,13 +417,13 @@ public static class StorageTools
             {
                 string fileId = ProtocolRegistry.IsCustomProtocol(folderId) ? CreateCustomItemId(folderId, file.Name) : file.Id;
                 _storableRegistry[fileId] = file;
-                
+
                 // Use mount alias substitution to present shorter IDs externally
                 string externalId = ProtocolRegistry.SubstituteWithMountAlias(fileId);
                 // Ensure the alias also maps to the same item for external access
                 if (externalId != fileId)
                     _storableRegistry[externalId] = file;
-                
+
                 files.Add(new
                 {
                     id = externalId,
@@ -450,6 +474,8 @@ public static class StorageTools
                 // Ensure the alias also maps to the same item for external access
                 if (externalId != subfolderId)
                     _storableRegistry[externalId] = subfolder;
+                externalId = EnsureFolderTrailingSlash(externalId, subfolder);
+                _storableRegistry[externalId] = subfolder;
                 
                 folders.Add(new
                 {
@@ -492,6 +518,8 @@ public static class StorageTools
                 // Ensure the alias also maps to the same item for external access
                 if (externalId != foundItem.Id)
                     _storableRegistry[externalId] = foundItem;
+                externalId = EnsureFolderTrailingSlash(externalId, foundItem);
+                _storableRegistry[externalId] = foundItem;
 
                 return new
                 {
@@ -598,6 +626,8 @@ public static class StorageTools
                 string externalId = ProtocolRegistry.SubstituteWithMountAlias(itemId);
                 if (externalId != itemId)
                     _storableRegistry[externalId] = item;
+                externalId = EnsureFolderTrailingSlash(externalId, item);
+                _storableRegistry[externalId] = item;
 
                 var typeStr = item switch
                 {
@@ -724,6 +754,8 @@ public static class StorageTools
                 var aliasId = ProtocolRegistry.SubstituteWithMountAlias(node.Id);
                 if (aliasId != node.Id)
                     _storableRegistry[aliasId] = node;
+                var normalizedAliasId = EnsureFolderTrailingSlash(aliasId, node);
+                _storableRegistry[normalizedAliasId] = node;
 
                 lastItem = node;
             }
@@ -735,6 +767,8 @@ public static class StorageTools
             var externalId = ProtocolRegistry.SubstituteWithMountAlias(targetItem.Id);
             if (externalId != targetItem.Id)
                 _storableRegistry[externalId] = targetItem;
+            externalId = EnsureFolderTrailingSlash(externalId, targetItem);
+            _storableRegistry[externalId] = targetItem;
 
             return new
             {
@@ -784,6 +818,8 @@ public static class StorageTools
                 var aliasId = ProtocolRegistry.SubstituteWithMountAlias(node.Id);
                 if (aliasId != node.Id)
                     _storableRegistry[aliasId] = node;
+                var normalizedAliasId = EnsureFolderTrailingSlash(aliasId, node);
+                _storableRegistry[normalizedAliasId] = node;
             }
 
             return relative;
@@ -943,6 +979,8 @@ public static class StorageTools
             // Ensure the alias also maps to the same item for external access
             if (externalId != rootFolder.Id)
                 _storableRegistry[externalId] = rootFolder;
+            externalId = EnsureFolderTrailingSlash(externalId, rootFolder);
+            _storableRegistry[externalId] = rootFolder;
 
             return new
             {
@@ -982,6 +1020,8 @@ public static class StorageTools
                 // Ensure the alias also maps to the same item for external access
                 if (externalId != foundItem.Id)
                     _storableRegistry[externalId] = foundItem;
+                externalId = EnsureFolderTrailingSlash(externalId, foundItem);
+                _storableRegistry[externalId] = foundItem;
 
                 return new
                 {
@@ -1032,6 +1072,8 @@ public static class StorageTools
             // Ensure the alias also maps to the same item for external access
             if (externalId != parentFolder.Id)
                 _storableRegistry[externalId] = parentFolder;
+            externalId = EnsureFolderTrailingSlash(externalId, parentFolder);
+            _storableRegistry[externalId] = parentFolder;
 
             return new
             {
@@ -1271,16 +1313,16 @@ public static class StorageTools
 // Issue003 helper: trim trailing slashes from scheme-form IDs (except roots) without touching internal (/...) IDs.
 internal static class StoragePathNormalizer
 {
+    /// <summary>
+    /// Normalizes external IDs for consistent registry lookup.
+    /// </summary>
+    /// <remarks>
+    /// Does NOT strip trailing slashes — IDs are opaque and trailing characters may be
+    /// semantically significant in the underlying storage implementation (e.g., MFS folder
+    /// IDs end with '/'). Stripping them would break alias round-tripping.
+    /// </remarks>
     internal static string NormalizeExternalId(string raw)
     {
-        if (string.IsNullOrWhiteSpace(raw)) return raw;
-        if (raw.StartsWith('/')) return raw; // internal canonical IDs untouched
-        var sep = raw.IndexOf("://", StringComparison.Ordinal);
-        if (sep <= 0) return raw; // not a scheme-form ID
-        if (raw.EndsWith("://", StringComparison.Ordinal)) return raw; // root URI
-        int end = raw.Length - 1;
-        while (end >= 0 && raw[end] == '/') end--; // trim all trailing slashes
-        if (end == raw.Length - 1) return raw; // no trailing slash
-        return raw.Substring(0, end + 1);
+        return raw;
     }
 }

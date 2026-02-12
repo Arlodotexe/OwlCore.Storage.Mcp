@@ -67,6 +67,8 @@ public class IpfsProtocolHandler : IProtocolHandler
     {
         // For IPFS paths within a folder, construct the path
         // e.g., "ipfs://QmHash" + "file.txt" -> "ipfs://QmHash/file.txt"
+        if (parentId.EndsWith("/"))
+            return $"{parentId}{itemName}";
         return $"{parentId.TrimEnd('/')}/{itemName}";
     }
 

@@ -38,6 +38,8 @@ public class HttpProtocolHandler : IProtocolHandler
     {
         // For HTTP, we don't really have parent/child relationships in the traditional sense
         // This would be used if we were constructing URLs, but typically HTTP files are accessed directly
+        if (parentId.EndsWith("/"))
+            return $"{parentId}{itemName}";
         return $"{parentId.TrimEnd('/')}/{itemName}";
     }
 

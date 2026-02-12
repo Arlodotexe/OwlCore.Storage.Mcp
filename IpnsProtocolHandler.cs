@@ -88,6 +88,8 @@ public class IpnsProtocolHandler : IProtocolHandler
     {
         // For IPNS paths within a folder, construct the path
         // e.g., "ipns://example.com" + "file.txt" -> "ipns://example.com/file.txt"
+        if (parentId.EndsWith("/"))
+            return $"{parentId}{itemName}";
         return $"{parentId.TrimEnd('/')}/{itemName}";
     }
 

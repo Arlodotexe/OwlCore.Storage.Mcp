@@ -33,6 +33,8 @@ public class MemoryProtocolHandler : IProtocolHandler
         {
             return $"memory://{itemName}";
         }
+        if (parentId.EndsWith("/"))
+            return $"{parentId}{itemName}";
         return $"{parentId.TrimEnd('/')}/{itemName}";
     }
 

@@ -17,8 +17,74 @@ using Ipfs.CoreApi;
 namespace OwlCore.Storage.Mcp;
 
 /// <summary>
-/// Registry for custom storage protocols that maps protocol schemes to storage implementations
+/// Registry for custom storage protocols that maps protocol schemes to storage implementations.
 /// </summary>
+/// <remarks>
+/// <para><strong>Mount Alias System — Design Intent</strong></para>
+/// <para>
+/// The alias system provides a bidirectional mapping between human-readable protocol schemes
+/// (e.g., <c>mfs://</c>, <c>onedrive://</c>, <c>home://</c>, <c>skills://</c>) and the native
+/// storage IDs of the folders they represent. Native IDs may be filesystem paths, random hashes
+/// (e.g., OneDrive/MS Graph), IPFS CIDs, or any other opaque identifier.
+/// </para>
+/// <para>
+/// <strong>Alias creation</strong> (<see cref="SubstituteWithMountAlias"/>): Given a native storage ID,
+/// finds the mounted folder whose native ID is a leading substring of the target ID, and replaces
+/// that prefix with the mount's protocol scheme. For example, if <c>home://</c> is mounted to
+/// <c>/home/username/</c>, then native ID <c>/home/username/Documents/file.txt</c> becomes
+/// <c>home://Documents/file.txt</c>. This is a function between two IDs — the alias scheme
+/// representing a known folder instance, and the literal child ID within that folder.
+/// </para>
+/// <para>
+/// <strong>Text collision handling</strong>: When the alias's literal ID is the leading text of
+/// a target child item's ID, the parent folder's ID is substituted with the alias. This primarily
+/// accommodates common path-based ID systems (where child IDs literally contain the parent's ID
+/// as a prefix), but has broader implications for alias chaining and virtual subfolder mounts.
+/// </para>
+/// <para>
+/// <strong>Alias resolution</strong> (<see cref="ResolveAliasToFullId"/>): The inverse operation.
+/// Given an aliased ID, replaces the protocol scheme prefix with the mounted folder's native ID
+/// to recover the original storage ID. This recurses to handle chained mounts.
+/// </para>
+/// <para>
+/// <strong>Why recursion</strong>: Most storage IDs aren't human- or agent-readable. Recursion
+/// enables protocol-like shortcuts into arbitrary depth — e.g., <c>skills://</c> mounted from
+/// <c>mfs://owlcore.storage.mcp.skills/</c> which itself resolves through the MFS root.
+/// </para>
+/// <para>
+/// <strong>Key use cases</strong>:
+/// <list type="bullet">
+///   <item>Disambiguate conflicting IDs (e.g., MFS root <c>/</c> vs System.IO root <c>/</c>)</item>
+///   <item>Shortcut into an impossible-to-remember ID (e.g., OneDrive's random hash root)</item>
+///   <item>Mount commonly accessed folders (<c>home://</c>, <c>dev://</c>, <c>downloads://</c>)</item>
+///   <item>Mount subfolders of existing protocols (<c>skills://</c> into <c>mfs://</c>)</item>
+///   <item>Chain mounts for virtual hierarchy organization</item>
+/// </list>
+/// </para>
+/// <para>
+/// <strong>Important</strong>: The alias functions operate purely on ID string substitution —
+/// replacing one ID prefix with another. They do NOT assume IDs are filesystem paths. Operations
+/// like <c>Path.Combine</c> must not be used, as IDs may be hashes, URIs, or other non-path formats.
+/// </para>
+/// <para>
+/// <strong>Protocols vs Mounts</strong>: Built-in protocols (mfs, ipfs, http, etc.) and mounted folder
+/// aliases are distinct concepts. <see cref="ResolveAliasToFullId"/> resolves mounted folder aliases only.
+/// During mount restoration, once the alias chain is fully resolved, the terminal protocol scheme is used
+/// to navigate from the protocol handler's root to the target item by native ID.
+/// </para>
+/// <para>
+/// <strong>Future: Virtual Subfolder Mounts</strong> (not yet implemented):
+/// <list type="bullet">
+///   <item>Mount multiple folders from multiple implementations into a unified virtual folder tree.</item>
+///   <item>Folders with the same name are merged, appearing as a single folder with combined contents,
+///         throughout the entire tree depth.</item>
+///   <item>Auto-mount mechanism for non-browseable items (e.g., making an archive file appear as a
+///         browseable subfolder within the virtual tree without explicit mount commands).</item>
+///   <item>Non-browseable roots (http, ipfs) and non-browseable leafs (archives) would participate
+///         through this auto-mount mechanism rather than requiring special-case handling.</item>
+/// </list>
+/// </para>
+/// </remarks>
 public static class ProtocolRegistry
 {
     private static readonly ConcurrentDictionary<string, IProtocolHandler> _protocolHandlers = new();
@@ -105,37 +171,47 @@ public static class ProtocolRegistry
 
                 try
                 {
-                    var originalId = MountSettings.ResolveOriginalId(cfg);
+                    var originalId = cfg.OriginalStorableId;
                     IStorable? storable = null;
                     
-                    // If we have browsable root protocol scheme, use it to get root and navigate
-                    if (!string.IsNullOrEmpty(cfg.BrowsableRootProtocolScheme))
+                    // Primary: resolve through the alias chain then use the terminal protocol handler.
+                    // ResolveAliasToFullId handles any mounted-folder aliases (chained mounts where
+                    // dependencies were already restored earlier in this loop). The result may still
+                    // carry a built-in protocol scheme (e.g., mfs://) which we resolve via the handler.
+                    try
                     {
-                        // Get the protocol handler for the browsable root
-                        if (_protocolHandlers.TryGetValue(cfg.BrowsableRootProtocolScheme, out var browsableHandler) && browsableHandler.HasBrowsableRoot)
+                        var resolvedId = ResolveAliasToFullId(originalId);
+                        var scheme = ExtractScheme(resolvedId);
+                        if (scheme != null && _protocolHandlers.TryGetValue(scheme, out var protoHandler))
                         {
-                            try
+                            if (protoHandler.HasBrowsableRoot)
                             {
-                                // Get the root from the handler
-                                var browsableRootUri = $"{cfg.BrowsableRootProtocolScheme}://";
-                                var root = await browsableHandler.CreateRootAsync(browsableRootUri, cancellationToken);
-
+                                var rootUri = $"{scheme}://";
+                                var root = await protoHandler.CreateRootAsync(rootUri, cancellationToken);
                                 if (root is IFolder rootFolder)
                                 {
-                                    // Navigate from root to the item by ID recursively
-                                    storable = await rootFolder.GetItemRecursiveAsync(originalId, cancellationToken);
+                                    // Reverse the alias: replace scheme:// with root's native ID to get the native child ID.
+                                    var remaining = resolvedId.Substring(rootUri.Length);
+                                    var nativeChildId = root.Id + remaining;
+                                    storable = await rootFolder.GetItemRecursiveAsync(nativeChildId, cancellationToken);
                                     StorageTools._storableRegistry[originalId] = storable;
                                 }
                             }
-                            catch
+                            else
                             {
-                                // Navigation failed, try direct registration fallback
-                                storable = null;
+                                // Non-browseable protocol — try direct resource access
+                                storable = await protoHandler.CreateResourceAsync(resolvedId, cancellationToken);
+                                if (storable != null)
+                                    StorageTools._storableRegistry[originalId] = storable;
                             }
                         }
                     }
-                    
-                    // Fallback: try direct registration (for backward compatibility or if browsable root unavailable)
+                    catch
+                    {
+                        storable = null;
+                    }
+
+                    // Last resort: direct registration (filesystem paths, etc.)
                     if (storable == null)
                     {
                         if (!await TryRegisterStorableAsync(originalId, cancellationToken))
@@ -330,68 +406,11 @@ public static class ProtocolRegistry
         // This preserves internal IDs (e.g., archive root name/hash) while keeping alias substitution at API interface/implementation boundaries.
         StorageTools._storableRegistry[rootUri] = folderToMount;
 
+        // Store the ID as provided — callers should pass the alias form (e.g., mfs://subfolder/)
+        // so the alias chain is self-sufficient for restoration.
         var idToStore = originalId ?? (storable is IStorableChild sc ? sc.Id : storable.Id);
 
-        // Detect browsable root protocol scheme by finding which handler's root matches this storable's root
-        string? browsableRootProtocolScheme = null;
-
-        if (storable is IStorableChild storableChild)
-        {
-            try
-            {
-                // Get the root of the storable being mounted
-                var storableRoot = await storableChild.GetRootAsync(CancellationToken.None);
-                
-                if (storableRoot != null)
-                {
-                    Logger.LogInformation($"[MountStorable] Storable root ID: {storableRoot.Id}");
-                    
-                    // Iterate through protocol handlers to find which one has a matching root
-                    foreach (var (scheme, protocolHandler) in _protocolHandlers)
-                    {
-                        // Skip mounted folders - they're not browsable roots
-                        if (protocolHandler is MountedFolderProtocolHandler) continue;
-                        
-                        // Only check handlers with browsable roots
-                        if (!protocolHandler.HasBrowsableRoot) continue;
-                        
-                        try
-                        {
-                            var candidateRootUri = $"{scheme}://";
-                            var candidateRoot = await protocolHandler.CreateRootAsync(candidateRootUri, CancellationToken.None);
-                            
-                            // If the IDs match, this handler is responsible for the storable's root
-                            if (candidateRoot != null && candidateRoot.Id == storableRoot.Id)
-                            {
-                                browsableRootProtocolScheme = scheme;
-                                Logger.LogInformation($"[MountStorable] Found browsable root protocol by ID match: {scheme}");
-                                break;
-                            }
-                        }
-                        catch
-                        {
-                            // Handler couldn't create root, skip
-                            continue;
-                        }
-                    }
-                }
-                else
-                {
-                    Logger.LogInformation($"[MountStorable] Storable root is null, cannot detect browsable root protocol");
-                }
-            }
-            catch (Exception ex)
-            {
-                Logger.LogWarning($"[MountStorable] Failed to detect browsable root protocol: {ex.Message}");
-            }
-        }
-        else
-        {
-            Logger.LogInformation($"[MountStorable] Storable is not IStorableChild, cannot detect browsable root protocol");
-        }
-
-        Logger.LogInformation($"[MountStorable] Final BrowsableRootProtocolScheme: {browsableRootProtocolScheme ?? "null"}");
-        MountSettings.AddOrUpdateMount(protocolScheme, idToStore, mountName, mountType, browsableRootProtocolScheme);
+        MountSettings.AddOrUpdateMount(protocolScheme, idToStore, mountName, mountType);
 
         if (mountType == StorableType.File)
             _mountedOriginalIds[idToStore] = protocolScheme;
@@ -446,42 +465,14 @@ public static class ProtocolRegistry
     }
 
     /// <summary>
-    /// Resolves a mounted path to its final underlying storage location
+    /// Resolves a mounted path to its final underlying storage location.
+    /// Delegates to <see cref="ResolveAliasToFullId"/> — retained for backward compatibility.
     /// </summary>
     /// <param name="mountedPath">The mounted path to resolve</param>
     /// <param name="maxDepth">Maximum resolution depth to prevent infinite loops</param>
-    /// <returns>The final resolved path, or the original path if not a mount</returns>
+    /// <returns>The final resolved ID, or the original ID if not a mount</returns>
     public static string ResolveMountPath(string mountedPath, int maxDepth = 10)
-    {
-        var currentPath = mountedPath;
-        var depth = 0;
-
-        while (depth < maxDepth)
-        {
-            var scheme = ExtractScheme(currentPath);
-            if (scheme == null || !_mountedFolders.TryGetValue(scheme, out var handler))
-                break;
-
-            // Get the underlying folder's ID
-            if (handler.MountedFolder is IStorableChild child)
-            {
-                // Replace the mount scheme with the underlying path
-                var remainingPath = currentPath.Substring($"{scheme}://".Length);
-                currentPath = string.IsNullOrEmpty(remainingPath) ? child.Id : $"{child.Id}/{remainingPath}";
-            }
-            else
-            {
-                break;
-            }
-
-            depth++;
-        }
-
-        if (depth >= maxDepth)
-            throw new InvalidOperationException($"Mount resolution exceeded maximum depth of {maxDepth} for path: {mountedPath}");
-
-        return currentPath;
-    }
+        => ResolveAliasToFullId(mountedPath, maxDepth);
 
     /// <summary>
     /// Unmounts a previously mounted folder by protocol scheme
@@ -540,7 +531,7 @@ public static class ProtocolRegistry
         var candidates = MountSettings.Mounts.Where(m => m.ProtocolScheme == protocolScheme).ToList();
         var targetConfig = candidates.FirstOrDefault(cfg =>
         {
-            var storedOriginal = MountSettings.ResolveOriginalId(cfg);
+            var storedOriginal = cfg.OriginalStorableId;
             var resolvedStored = ResolveAliasToFullId(storedOriginal);
             return string.Equals(resolvedStored, mountedHandler?.MountedFolder.Id, StringComparison.OrdinalIgnoreCase);
         });
@@ -580,7 +571,7 @@ public static class ProtocolRegistry
                         {
                             try
                             {
-                                return string.Equals(ResolveAliasToFullId(MountSettings.ResolveOriginalId(cfg)), h.MountedFolder.Id, StringComparison.OrdinalIgnoreCase);
+                                return string.Equals(ResolveAliasToFullId(cfg.OriginalStorableId), h.MountedFolder.Id, StringComparison.OrdinalIgnoreCase);
                             }
                             catch
                             {
@@ -591,7 +582,7 @@ public static class ProtocolRegistry
                         if (match != null)
                         {
                             mountType = match.MountType;
-                            originalId = MountSettings.ResolveOriginalId(match);
+                            originalId = match.OriginalStorableId;
                         }
                     }
                 }
@@ -645,7 +636,7 @@ public static class ProtocolRegistry
         {
             if (cfg.MountType != StorableType.File)
                 continue;
-            var storedOriginal = MountSettings.ResolveOriginalId(cfg);
+            var storedOriginal = cfg.OriginalStorableId;
             if (string.Equals(storedOriginal, originalId, StringComparison.OrdinalIgnoreCase))
             {
                 protocolScheme = cfg.ProtocolScheme;
@@ -705,15 +696,80 @@ public static class ProtocolRegistry
         // Create new handler with updated information
         var newHandler = new MountedFolderProtocolHandler(currentHandler.MountedFolder, finalMountName, finalProtocolScheme);
         var newRootUri = $"{finalProtocolScheme}://";
+        var oldRootUri = $"{currentProtocolScheme}://";
 
-        // Perform atomic update
-            _protocolHandlers[currentProtocolScheme] = newHandler;
-            _mountedFolders[currentProtocolScheme] = newHandler;
+        // Perform atomic update — re-key all dictionaries when scheme changes
+        if (finalProtocolScheme != currentProtocolScheme)
+        {
+            _protocolHandlers.TryRemove(currentProtocolScheme, out _);
+            _mountedFolders.TryRemove(currentProtocolScheme, out _);
+            StorageTools._storableRegistry.TryRemove(oldRootUri, out _);
+        }
+
+        _protocolHandlers[finalProtocolScheme] = newHandler;
+        _mountedFolders[finalProtocolScheme] = newHandler;
+        StorageTools._storableRegistry[newRootUri] = currentHandler.MountedFolder;
 
         // Update persistent settings
         MountSettings.RenameMount(currentProtocolScheme, currentHandler.MountedFolder.Id, newProtocolScheme, newMountName);
 
         return newRootUri;
+    }
+
+    /// <summary>
+    /// Finds all known protocol/mount aliases whose underlying (native) root ID matches the given ID.
+    /// Used to disambiguate when a native ID collides across implementations.
+    /// </summary>
+    /// <param name="nativeId">The native storage ID to look up.</param>
+    /// <returns>List of alias URIs (e.g., <c>mfs://</c>, <c>home://</c>) whose root maps to this native ID.</returns>
+    public static List<string> GetAllAliasesForNativeId(string nativeId)
+    {
+        var aliases = new List<string>();
+        if (string.IsNullOrWhiteSpace(nativeId))
+            return aliases;
+
+        // Check built-in protocol handlers — their roots may share the same native ID
+        foreach (var (scheme, handler) in _protocolHandlers)
+        {
+            if (handler is MountedFolderProtocolHandler mounted)
+            {
+                // For mounted folders, check if the mounted folder's ID matches
+                if (mounted.MountedFolder is IStorableChild child &&
+                    string.Equals(child.Id, nativeId, StringComparison.OrdinalIgnoreCase))
+                {
+                    aliases.Add($"{scheme}://");
+                }
+            }
+            else if (handler.HasBrowsableRoot)
+            {
+                // For built-in protocols, check if a cached root's ID matches
+                var rootUri = $"{scheme}://";
+                if (StorageTools._storableRegistry.TryGetValue(rootUri, out var root) &&
+                    string.Equals(root.Id, nativeId, StringComparison.OrdinalIgnoreCase))
+                {
+                    aliases.Add(rootUri);
+                }
+            }
+        }
+
+        // Also check mounts whose underlying ID starts with nativeId (subfolder mounts)
+        foreach (var mount in _mountedFolders.Values)
+        {
+            if (mount.MountedFolder is IStorableChild mountedChild)
+            {
+                var mountedId = mountedChild.Id;
+                // If the native ID starts with this mount's ID, it's reachable through it
+                if (nativeId.StartsWith(mountedId, StringComparison.OrdinalIgnoreCase) && nativeId != mountedId)
+                {
+                    var remaining = nativeId.Substring(mountedId.Length);
+                    var aliasPath = $"{mount.ProtocolScheme}://{remaining.TrimStart('/', '\\')}";
+                    if (!aliases.Contains(aliasPath))
+                        aliases.Add(aliasPath);
+                }
+            }
+        }
+
+        return aliases;
     }
 
     /// <summary>
@@ -769,11 +825,17 @@ public static class ProtocolRegistry
     }
 
     /// <summary>
-    /// Resolves a potentially aliased ID back to its full underlying ID
+    /// Resolves a potentially aliased ID back to its full underlying (native) ID.
     /// </summary>
     /// <param name="aliasId">The potentially aliased ID to resolve</param>
     /// <param name="maxDepth">Maximum resolution depth to prevent infinite loops</param>
     /// <returns>The fully resolved underlying ID</returns>
+    /// <remarks>
+    /// This is the inverse of <see cref="SubstituteWithMountAlias"/>.
+    /// Replaces the mount scheme prefix (<c>scheme://</c>) with the mounted folder's native ID,
+    /// reversing the string substitution that created the alias. Recurses to handle chained mounts.
+    /// Does NOT assume IDs are filesystem paths — uses pure string concatenation, not Path.Combine.
+    /// </remarks>
     public static string ResolveAliasToFullId(string aliasId, int maxDepth = 10)
     {
         if (string.IsNullOrWhiteSpace(aliasId))
@@ -792,20 +854,11 @@ public static class ProtocolRegistry
             if (handler.MountedFolder is not IStorableChild child)
                 break;
 
-            // Replace the mount scheme with the underlying ID
-            var remainingPath = currentId.Substring($"{scheme}://".Length);
-
-            // Normalize path separators and combine properly
-            if (string.IsNullOrEmpty(remainingPath))
-            {
-                currentId = child.Id;
-            }
-            else
-            {
-                // Normalize path separators to match the underlying system
-                var normalizedPath = remainingPath.Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar);
-                currentId = Path.Combine(child.Id, normalizedPath);
-            }
+            // Reverse the alias substitution: replace "scheme://" with the folder's native ID.
+            // This is the exact inverse of SubstituteWithMountAlias, which replaced the native ID
+            // prefix with "scheme://". Pure string substitution — IDs are not assumed to be paths.
+            var remaining = currentId.Substring($"{scheme}://".Length);
+            currentId = child.Id + remaining;
 
             depth++;
         }

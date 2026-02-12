@@ -1,9 +1,5 @@
 using OwlCore.Storage;
-using OwlCore.Storage.System.IO;
-using OwlCore.Diagnostics;
 using OwlCore.ComponentModel;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 
 namespace OwlCore.Storage.Mcp;
 
@@ -13,10 +9,6 @@ namespace OwlCore.Storage.Mcp;
 public class MountConfiguration
 {
     public string ProtocolScheme { get; set; } = string.Empty;
-
-    [Obsolete("Use OriginalStorableId")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.Always)]
-    public string OriginalFolderId { get; set; } = string.Empty;
     public string OriginalStorableId { get; set; } = string.Empty;
     public string MountName { get; set; } = string.Empty;
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
@@ -24,12 +16,6 @@ public class MountConfiguration
 
     // For archive mounts we store StorableType.File (the folder presentation is implicit once mounted).
     public StorableType MountType { get; set; } = StorableType.Folder;
-
-    /// <summary>
-    /// The protocol scheme of the browseable root that the OriginalStorableId belongs to (e.g., "mfs").
-    /// Used during mount restoration to get the correct protocol handler's root for navigation.
-    /// </summary>
-    public string? BrowsableRootProtocolScheme { get; set; } = null;
 }
 
 /// <summary>
@@ -43,20 +29,11 @@ public class MountSettings : SettingsBase
     }
 
     /// <summary>
-    /// Dictionary of mount configurations keyed by protocol scheme
-    /// </summary>
-    [Obsolete("Use Mounts. This is kept for migration reads only.")]
-    internal Dictionary<string, MountConfiguration> MountsLegacy
-    {
-        get => GetSetting(() => new Dictionary<string, MountConfiguration>(), "Mounts");
-        set => SetSetting(value, "Mounts");
-    }
-
-    /// <summary>
-    /// A flat list of mount configurations.
+    /// A flat list of mount configurations. One entry per protocol scheme.
     /// </summary>
     /// <remarks>
-    /// This is preferred as it allows for multiple mounts of the same protocol scheme which each may be valid or invalid at different points in space or time, depending on the user.
+    /// Each protocol scheme maps to exactly one mount configuration.
+    /// When a mount is re-created with the same scheme, the previous entry is replaced.
     /// </remarks>
     public List<MountConfiguration> Mounts
     {
@@ -67,14 +44,13 @@ public class MountSettings : SettingsBase
     public override async Task LoadAsync(CancellationToken? cancellationToken = null)
     {
         await base.LoadAsync(cancellationToken);
-        MigrateMountConfigurationDictionaryToList();
-        MigrateLegacyOriginalFolderIdToStorableId();
     }
 
     /// <summary>
-    /// Adds or updates a mount configuration (generalized for any storable)
+    /// Adds or updates a mount configuration (generalized for any storable).
+    /// Removes any existing entries for the same protocol scheme before adding.
     /// </summary>
-    public void AddOrUpdateMount(string protocolScheme, string originalStorableId, string mountName, StorableType mountType, string? browsableRootProtocolScheme = null)
+    public void AddOrUpdateMount(string protocolScheme, string originalStorableId, string mountName, StorableType mountType)
     {
         var dependsOn = new List<string>();
         var scheme = ProtocolRegistry.ExtractScheme(originalStorableId);
@@ -82,68 +58,20 @@ public class MountSettings : SettingsBase
             dependsOn.Add(scheme);
 
         var mounts = Mounts;
+
+        // Remove any existing entries for this protocol scheme to prevent accumulation of stale entries
+        mounts.RemoveAll(m => m.ProtocolScheme == protocolScheme);
+
         mounts.Add(new MountConfiguration
         {
             ProtocolScheme = protocolScheme,
-            // Do not populate deprecated OriginalFolderId anymore (kept for legacy reads)
-            OriginalFolderId = string.Empty,
             OriginalStorableId = originalStorableId,
             MountName = mountName,
             CreatedAt = DateTime.UtcNow,
             DependsOn = dependsOn,
             MountType = mountType,
-            BrowsableRootProtocolScheme = browsableRootProtocolScheme,
         });
         Mounts = mounts; // persist
-    }
-
-    internal void MigrateMountConfigurationDictionaryToList()
-    {
-        try
-        {
-
-            Logger.LogInformation("Checking for legacy mount configuration dictionary to migrate...");
-            Logger.LogTrace($"Legacy mount configurations found: {MountsLegacy.Count}");
-            if (MountsLegacy.Count == 0)
-                return;
-
-            // Legacy mount migration must be run before superseded list-based property is accessed.
-            // If data exists in the "Mounts" file, it will be loaded by the legacy property and migrated.
-            // When this happens, the type file must also be updated to reflect the new type.
-            // Saving should do this automatically, so we stop there and wait for an explicit save to be requested.
-            var mounts = MountsLegacy.Values.ToList();
-            base.ResetSetting("Mounts"); // clear legacy setting
-
-            Mounts = mounts;
-            Logger.LogCritical("Migrated legacy mount configuration dictionary to list. Please save settings to complete migration.");
-        }
-        catch (InvalidCastException ex) when (ex.Message.Contains($"Unable to cast object of type '{typeof(List<MountConfiguration>)}' to type '{typeof(Dictionary<string, MountConfiguration>)}'"))
-        {
-            Logger.LogInformation("Legacy mount dictionary not present or already migrated. Skipping migration.");
-        }
-        catch (Exception ex)
-        {
-            Logger.LogError("Failed to migrate legacy mount configuration dictionary to list.", ex);
-        }
-    }
-
-    internal void MigrateLegacyOriginalFolderIdToStorableId()
-    {
-        #pragma warning disable CS0612 // Suppress 'obsolete' warnings for legacy migration
-        var mounts = Mounts;
-        var changed = false;
-        foreach (var cfg in mounts)
-        {
-            if (string.IsNullOrEmpty(cfg.OriginalStorableId) && !string.IsNullOrEmpty(cfg.OriginalFolderId))
-            {
-                cfg.OriginalStorableId = cfg.OriginalFolderId;
-                cfg.OriginalFolderId = string.Empty; // clear deprecated field
-                changed = true;
-            }
-        }
-        if (changed)
-            Mounts = mounts; // triggers save
-        #pragma warning restore CS0612
     }
 
     /// <summary>
@@ -153,7 +81,7 @@ public class MountSettings : SettingsBase
     {
         // Match using normalized underlying IDs so alias forms in settings still match live mount IDs
         var targetConfig = Mounts.FirstOrDefault(m => m.ProtocolScheme == currentProtocolScheme &&
-            ProtocolRegistry.ResolveAliasToFullId(ResolveOriginalId(m)).Equals(
+            ProtocolRegistry.ResolveAliasToFullId(m.OriginalStorableId).Equals(
                 ProtocolRegistry.ResolveAliasToFullId(originalStorableId), StringComparison.OrdinalIgnoreCase));
 
         if (targetConfig != null)
@@ -225,9 +153,4 @@ public class MountSettings : SettingsBase
 
         return false;
     }
-
-    #pragma warning disable CS0612
-    internal static string ResolveOriginalId(MountConfiguration config)
-        => string.IsNullOrEmpty(config.OriginalStorableId) ? config.OriginalFolderId : config.OriginalStorableId;
-    #pragma warning restore CS0612
 }

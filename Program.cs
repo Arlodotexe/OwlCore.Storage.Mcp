@@ -164,7 +164,7 @@ public static class CalculatorTool
 [McpServerToolType]
 public static class FileLauncherTool
 {
-    [McpServerTool, Description("Starts/launches a file with the system's default application. Supports protocol aliases (e.g., myproject://file.txt, mfs://document.pdf).")]
+    [McpServerTool, Description("Opens a file in the operating system's default application (e.g., opens a .pdf in a PDF viewer, a .png in an image viewer). This does NOT read or return file contents — use read_file_as_text or read_file_text_range to read file contents instead.")]
     public static string StartFile(string filePath, string verb = "open", string arguments = "")
     {
         try

@@ -41,6 +41,9 @@ public class MountedFolderProtocolHandler : IProtocolHandler
             return $"{_protocolScheme}://{itemName}";
         }
         
+        // Parent ID may already end with '/' (folder convention) — don't double up
+        if (parentId.EndsWith("/"))
+            return $"{parentId}{itemName}";
         return $"{parentId}/{itemName}";
     }
 

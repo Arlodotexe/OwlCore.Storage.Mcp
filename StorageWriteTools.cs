@@ -519,6 +519,8 @@ public static partial class StorageWriteTools
             string externalId = ProtocolRegistry.SubstituteWithMountAlias(resultFolder.Id);
             if (externalId != resultFolder.Id)
                 _storableRegistry[externalId] = resultFolder;
+            externalId = StorageTools.EnsureFolderTrailingSlash(externalId, resultFolder);
+            _storableRegistry[externalId] = resultFolder;
 
             return new
             {
