@@ -136,6 +136,47 @@ public static class StorageTools
             return;
         }
 
+        // If the ID is a mounted-folder alias with a path component, auto-navigate from the mount root.
+        // This lets callers access items by alias ID (e.g., skills://terminal/pwsh/file.md) without
+        // having to manually navigate from root first.
+        var idScheme = ProtocolRegistry.ExtractScheme(id);
+        if (idScheme != null && ProtocolRegistry.IsMountedFolder(idScheme))
+        {
+            var mountRootUri = $"{idScheme}://";
+            var pathPortion = id.Substring(mountRootUri.Length);
+            if (!string.IsNullOrEmpty(pathPortion) && _storableRegistry.TryGetValue(mountRootUri, out var mountRoot) && mountRoot is IFolder mountRootFolder)
+            {
+                try
+                {
+                    // Navigate from mount root along the relative path
+                    IStorable? lastNode = null;
+                    await foreach (var node in mountRootFolder.GetItemsAlongRelativePathAsync(pathPortion, cancellationToken))
+                    {
+                        _storableRegistry[node.Id] = node;
+                        var aliasId = ProtocolRegistry.SubstituteWithMountAlias(node.Id);
+                        if (aliasId != node.Id)
+                            _storableRegistry[aliasId] = node;
+                        var normalizedAliasId = EnsureFolderTrailingSlash(aliasId, node);
+                        _storableRegistry[normalizedAliasId] = node;
+                        lastNode = node;
+                    }
+
+                    if (lastNode != null)
+                    {
+                        // Also register under the original requested ID
+                        _storableRegistry[id] = lastNode;
+                        Logger.LogInformation($"[STORAGE] Auto-navigated mount alias {id} to item: {lastNode.Id}");
+                        return;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogInformation($"[STORAGE] Auto-navigation for mount alias {id} failed: {ex.Message}");
+                    // Fall through to standard resolution
+                }
+            }
+        }
+
         // Use the resolved ID for registration attempts
         var registrationId = resolvedId;
         Logger.LogInformation($"[STORAGE] Attempting to register: {registrationId}");
