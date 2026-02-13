@@ -165,98 +165,79 @@ public static class CalculatorTool
 public static class FileLauncherTool
 {
     [McpServerTool, Description("Opens a file in the operating system's default application (e.g., opens a .pdf in a PDF viewer, a .png in an image viewer). This does NOT read or return file contents — use read_file_as_text or read_file_text_range to read file contents instead.")]
-    public static string StartFile(string filePath, string verb = "open", string arguments = "")
+    public static async Task<object> StartFile(
+        [Description("Path to the file or executable to start.")] string filePath,
+        string verb = "open",
+        [Description("Arguments to pass to the process.")] string arguments = "",
+        [Description("Working directory for the process. Defaults to the file's directory.")] string? workingDirectory = null,
+        [Description("Text to write to the process's standard input (stdin). Null to not send any input.")] string? stdin = null,
+        [Description("Maximum time in milliseconds to wait for the process to exit. Default 30000 (30s). Set to 0 to not wait (fire-and-forget for GUI apps).")] int timeoutMs = 30000)
     {
         try
         {
             if (string.IsNullOrWhiteSpace(filePath))
                 throw new McpException("File path cannot be empty", McpErrorCode.InvalidParams);
 
-            // Resolve any protocol aliases to actual file paths
             var resolvedPath = ProtocolRegistry.ResolveAliasToFullId(filePath);
 
-            // Check if the resolved path is a local file that exists
-            if (!File.Exists(resolvedPath))
+            // Fire-and-forget mode (timeoutMs == 0): open with shell, no stdio capture
+            if (timeoutMs == 0)
             {
-                // If the original path was different from resolved, show both in error
-                if (resolvedPath != filePath)
-                    throw new McpException($"File not found. Original path: '{filePath}', Resolved path: '{resolvedPath}'", McpErrorCode.InvalidParams);
-                else
-                    throw new McpException($"File not found: '{filePath}'", McpErrorCode.InvalidParams);
+                if (!File.Exists(resolvedPath))
+                {
+                    if (resolvedPath != filePath)
+                        throw new McpException($"File not found. Original path: '{filePath}', Resolved path: '{resolvedPath}'", McpErrorCode.InvalidParams);
+                    else
+                        throw new McpException($"File not found: '{filePath}'", McpErrorCode.InvalidParams);
+                }
+
+                var shellPsi = new ProcessStartInfo
+                {
+                    FileName = resolvedPath,
+                    UseShellExecute = true,
+                    CreateNoWindow = true,
+                    Verb = verb ?? "open",
+                    Arguments = arguments ?? "",
+                };
+
+                var shellProcess = Process.Start(shellPsi);
+                if (shellProcess == null)
+                    throw new McpException($"Failed to start file: '{filePath}'", McpErrorCode.InternalError);
+
+                return new
+                {
+                    started = true,
+                    message = resolvedPath != filePath
+                        ? $"Started: '{filePath}' (resolved to: '{resolvedPath}')"
+                        : $"Started: '{filePath}'"
+                };
             }
 
-            var processStartInfo = new ProcessStartInfo
-            {
-                FileName = resolvedPath,
-                UseShellExecute = true,
-                CreateNoWindow = true,
-                Verb = verb ?? "open",
-                Arguments = arguments ?? "",
-            };
-
-            var process = Process.Start(processStartInfo);
-            if (process != null)
-            {
-                if (resolvedPath != filePath)
-                    return $"Successfully started file: '{filePath}' (resolved to: '{resolvedPath}')";
-                else
-                    return $"Successfully started file: '{filePath}'";
-            }
-            else
-            {
-                throw new McpException($"Failed to start file: '{filePath}'", McpErrorCode.InternalError);
-            }
-        }
-        catch (McpException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            throw new McpException($"Failed to start file '{filePath}': {ex.Message}", ex, McpErrorCode.InternalError);
-        }
-    }
-
-    [McpServerTool, Description("Runs an executable with arguments, captures stdout and stderr, and returns the result. Use for CLI tools (e.g., pwsh, git, python). Waits for the process to exit. For opening files in GUI apps, use start_file instead.")]
-    public static async Task<object> RunProcess(
-        [Description("Path to the executable (e.g., '/usr/bin/pwsh', '/usr/bin/git').")] string executable,
-        [Description("Arguments to pass to the executable.")] string arguments = "",
-        [Description("Working directory for the process. Defaults to system temp.")] string? workingDirectory = null,
-        [Description("Text to write to the process's standard input (stdin). Null to not send any input.")] string? stdin = null,
-        [Description("Maximum time in milliseconds to wait for the process to exit. Default 30000 (30s).")] int timeoutMs = 30000)
-    {
-        try
-        {
-            if (string.IsNullOrWhiteSpace(executable))
-                throw new McpException("Executable path cannot be empty", McpErrorCode.InvalidParams);
-
-            // Resolve any protocol aliases
-            var resolvedExecutable = ProtocolRegistry.ResolveAliasToFullId(executable);
-
+            // Captured mode: redirect stdio, wait for exit
             var psi = new ProcessStartInfo
             {
-                FileName = resolvedExecutable,
+                FileName = resolvedPath,
                 Arguments = arguments ?? "",
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 RedirectStandardInput = stdin != null,
                 CreateNoWindow = true,
-                WorkingDirectory = workingDirectory ?? Path.GetTempPath(),
+                WorkingDirectory = workingDirectory
+                    ?? (File.Exists(resolvedPath) ? Path.GetDirectoryName(resolvedPath) : null)
+                    ?? Path.GetTempPath(),
             };
 
             using var process = Process.Start(psi);
             if (process == null)
-                throw new McpException($"Failed to start process: '{executable}'", McpErrorCode.InternalError);
+                throw new McpException($"Failed to start process: '{filePath}'", McpErrorCode.InternalError);
 
-            // Write stdin if provided, then close the stream
             if (stdin != null)
             {
                 await process.StandardInput.WriteAsync(stdin);
                 process.StandardInput.Close();
             }
 
-            // Read stdout and stderr concurrently to avoid deadlocks
             var stdoutTask = process.StandardOutput.ReadToEndAsync();
             var stderrTask = process.StandardError.ReadToEndAsync();
 
@@ -292,7 +273,7 @@ public static class FileLauncherTool
         }
         catch (Exception ex)
         {
-            throw new McpException($"Failed to run '{executable}': {ex.Message}", ex, McpErrorCode.InternalError);
+            throw new McpException($"Failed to start file '{filePath}': {ex.Message}", ex, McpErrorCode.InternalError);
         }
     }
 }
