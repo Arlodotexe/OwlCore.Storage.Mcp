@@ -167,9 +167,9 @@ public static class FileLauncherTool
     [McpServerTool, Description("Opens a file: processes, documents, images, audio, video, in the default OS program. Handles any file or process the local OS can handle, even non-local storage IDs, which are copied locally first. Returns { exitCode, stdout, stderr, timedOut }. Set timeoutMs=0 for fire-and-forget (GUI apps, media).")]
     public static async Task<object> StartFile(
         [Description("Storage ID of the file to start. Auto-copied to local storage if non-local.")] string fileId,
-        [Description("Shell verb for GUI applications. Ignored when using shell execute on a process instead of launching a file with GUI.")] string verb = "open",
+        [Description("Shell verb for GUI applications. Not used for shell execute, only used for GUI file launch.")] string verb = "open",
         [Description("Process arguments to pass to the started file.")] string cliArguments = "",
-        [Description("Working directory for the process or file to start in.")] string? workingDirectory = null,
+        [Description("Working directory for shell execution to start in.")] string? workingDirectory = null,
         [Description("Text to write to stdin.")] string? stdin = null,
         [Description("Timeout in ms. Default 30000. Set to 0 for fire-and-forget.")] int timeoutMs = 30000,
         [Description("Whether to overwrite any existing local copy of the started non-local file. Default false.")] bool overwrite = false)
