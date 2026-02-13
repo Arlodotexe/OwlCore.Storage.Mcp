@@ -164,9 +164,9 @@ public static class CalculatorTool
 [McpServerToolType]
 public static class FileLauncherTool
 {
-    [McpServerTool, Description("Runs an executable or opens a file. Executes CLI tools (e.g., pwsh, git, python) and returns { exitCode, stdout, stderr, timedOut }. Also opens files in GUI apps when timeoutMs=0. Supports stdin, working directory, and timeout. Does NOT read file contents — use read_file_as_text or read_file_text_range for that.")]
+    [McpServerTool, Description("Runs an executable or opens a file. The filePath must be a storage ID — for local executables, this is the full filesystem path (e.g., '/usr/bin/pwsh', '/usr/bin/git'). Bare command names like 'git' or 'pwsh' are NOT valid storage IDs. Returns { exitCode, stdout, stderr, timedOut }. Set timeoutMs=0 to open in a GUI app without capturing output. Supports stdin, working directory, and timeout. Does NOT read file contents — use read_file_as_text or read_file_text_range for that.")]
     public static async Task<object> StartFile(
-        [Description("Path to the file or executable to start.")] string filePath,
+        [Description("Storage ID of the file or executable to start. For local executables, use the full filesystem path (e.g., '/usr/bin/pwsh', '/usr/bin/git'). Bare names like 'pwsh' are NOT valid IDs.")] string filePath,
         string verb = "open",
         [Description("Arguments to pass to the process.")] string arguments = "",
         [Description("Working directory for the process. Defaults to the file's directory.")] string? workingDirectory = null,
