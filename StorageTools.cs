@@ -393,7 +393,7 @@ public static class StorageTools
     }
 
     [McpServerTool, Description($"Lists all items in a folder by ID or path. Returns array of items with their IDs, names, and types. Use ${nameof(GetFolderFiles)} or {nameof(GetFolderSubfolders)} to filter by type. Prefer {nameof(GetItemByRelativePath)} for hierarchical or path-based navigation.")]
-    public static async Task<object[]> GetFolderItems(string folderId)
+    public static async Task<object> GetFolderItems(string folderId, [Description("Maximum number of results to return. Default 100.")] int maxResults = 100, [Description("Number of items to skip for pagination. Default 0.")] int skip = 0)
     {
         var cancellationToken = CancellationToken.None;
 
@@ -414,6 +414,8 @@ public static class StorageTools
                 throw new McpException($"Folder with ID '{folderId}' not found", McpErrorCode.InvalidParams);
 
             var items = new List<object>();
+            int index = 0;
+            int collected = 0;
             await foreach (var item in folder.GetItemsAsync())
             {
                 string itemId = ProtocolRegistry.IsCustomProtocol(folderId) ? CreateCustomItemId(folderId, item.Name) : item.Id;
@@ -423,9 +425,15 @@ public static class StorageTools
                     _storableRegistry[externalId] = item;
                 externalId = EnsureFolderTrailingSlash(externalId, item);
                 _storableRegistry[externalId] = item;
-                items.Add(new { id = externalId, name = item.Name, type = item switch { IFile => "file", IFolder => "folder", _ => "unknown" } });
+
+                if (index >= skip && collected < maxResults)
+                {
+                    items.Add(new { id = externalId, name = item.Name, type = item switch { IFile => "file", IFolder => "folder", _ => "unknown" } });
+                    collected++;
+                }
+                index++;
             }
-            return items.ToArray();
+            return new { items = items.ToArray(), totalCount = index, hasMore = index > skip + collected };
         }
         catch (McpException) { throw; }
         catch (Exception ex)
@@ -435,7 +443,7 @@ public static class StorageTools
     }
 
     [McpServerTool, Description("Lists only files in a folder by ID or path. Returns array of file items.")]
-    public static async Task<object[]> GetFolderFiles(string folderId)
+    public static async Task<object> GetFolderFiles(string folderId, [Description("Maximum number of results to return. Default 100.")] int maxResults = 100, [Description("Number of items to skip for pagination. Default 0.")] int skip = 0)
     {
         var cancellationToken = CancellationToken.None;
         try
@@ -454,6 +462,8 @@ public static class StorageTools
                 throw new McpException($"Folder with ID '{folderId}' not found", McpErrorCode.InvalidParams);
 
             var files = new List<object>();
+            int index = 0;
+            int collected = 0;
             await foreach (var file in folder.GetFilesAsync())
             {
                 string fileId = ProtocolRegistry.IsCustomProtocol(folderId) ? CreateCustomItemId(folderId, file.Name) : file.Id;
@@ -465,15 +475,20 @@ public static class StorageTools
                 if (externalId != fileId)
                     _storableRegistry[externalId] = file;
 
-                files.Add(new
+                if (index >= skip && collected < maxResults)
                 {
-                    id = externalId,
-                    name = file.Name,
-                    type = "file"
-                });
+                    files.Add(new
+                    {
+                        id = externalId,
+                        name = file.Name,
+                        type = "file"
+                    });
+                    collected++;
+                }
+                index++;
             }
 
-            return files.ToArray();
+            return new { items = files.ToArray(), totalCount = index, hasMore = index > skip + collected };
         }
         catch (McpException)
         {
@@ -486,7 +501,7 @@ public static class StorageTools
     }
 
     [McpServerTool, Description("Lists only folders in a folder by ID or path. Returns array of folder items.")]
-    public static async Task<object[]> GetFolderSubfolders(string folderId)
+    public static async Task<object> GetFolderSubfolders(string folderId, [Description("Maximum number of results to return. Default 100.")] int maxResults = 100, [Description("Number of items to skip for pagination. Default 0.")] int skip = 0)
     {
         var cancellationToken = CancellationToken.None;
         try
@@ -505,6 +520,8 @@ public static class StorageTools
                 throw new McpException($"Folder with ID '{folderId}' not found", McpErrorCode.InvalidParams);
 
             var folders = new List<object>();
+            int index = 0;
+            int collected = 0;
             await foreach (var subfolder in folder.GetFoldersAsync())
             {
                 string subfolderId = ProtocolRegistry.IsCustomProtocol(folderId) ? CreateCustomItemId(folderId, subfolder.Name) : subfolder.Id;
@@ -517,16 +534,21 @@ public static class StorageTools
                     _storableRegistry[externalId] = subfolder;
                 externalId = EnsureFolderTrailingSlash(externalId, subfolder);
                 _storableRegistry[externalId] = subfolder;
-                
-                folders.Add(new
+
+                if (index >= skip && collected < maxResults)
                 {
-                    id = externalId,
-                    name = subfolder.Name,
-                    type = "folder"
-                });
+                    folders.Add(new
+                    {
+                        id = externalId,
+                        name = subfolder.Name,
+                        type = "folder"
+                    });
+                    collected++;
+                }
+                index++;
             }
 
-            return folders.ToArray();
+            return new { items = folders.ToArray(), totalCount = index, hasMore = index > skip + collected };
         }
         catch (McpException)
         {
