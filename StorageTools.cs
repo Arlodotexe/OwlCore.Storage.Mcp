@@ -186,7 +186,7 @@ public static class StorageTools
         {
             // Check for ambiguity: this native ID may also be the root of a protocol or mount.
             // If so, the model should use the protocol alias instead of the raw path.
-            var aliases = ProtocolRegistry.GetAllAliasesForNativeId(registrationId);
+            var aliases = await ProtocolRegistry.GetAllAliasesForNativeIdAsync(registrationId);
             if (aliases.Count > 0)
             {
                 throw new InvalidOperationException(

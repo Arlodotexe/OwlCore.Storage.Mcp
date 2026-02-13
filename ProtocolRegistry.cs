@@ -722,7 +722,7 @@ public static class ProtocolRegistry
     /// </summary>
     /// <param name="nativeId">The native storage ID to look up.</param>
     /// <returns>List of alias URIs (e.g., <c>mfs://</c>, <c>home://</c>) whose root maps to this native ID.</returns>
-    public static List<string> GetAllAliasesForNativeId(string nativeId)
+    public static async Task<List<string>> GetAllAliasesForNativeIdAsync(string nativeId)
     {
         var aliases = new List<string>();
         if (string.IsNullOrWhiteSpace(nativeId))
@@ -742,10 +742,27 @@ public static class ProtocolRegistry
             }
             else if (handler.HasBrowsableRoot)
             {
-                // For built-in protocols, check if a cached root's ID matches
+                // For built-in protocols, check if the root's native ID matches.
+                // Create the root on-demand if needed — can't rely on cache because
+                // the root may not have been loaded yet in this session.
                 var rootUri = $"{scheme}://";
-                if (StorageTools._storableRegistry.TryGetValue(rootUri, out var root) &&
-                    string.Equals(root.Id, nativeId, StringComparison.OrdinalIgnoreCase))
+                IStorable? root = null;
+                if (StorageTools._storableRegistry.TryGetValue(rootUri, out root))
+                {
+                    // Already cached
+                }
+                else
+                {
+                    try
+                    {
+                        root = await handler.CreateRootAsync(rootUri, CancellationToken.None);
+                        if (root != null)
+                            StorageTools._storableRegistry[rootUri] = root;
+                    }
+                    catch { /* handler unavailable, skip */ }
+                }
+
+                if (root != null && string.Equals(root.Id, nativeId, StringComparison.OrdinalIgnoreCase))
                 {
                     aliases.Add(rootUri);
                 }
