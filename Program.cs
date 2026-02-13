@@ -164,7 +164,7 @@ public static class CalculatorTool
 [McpServerToolType]
 public static class FileLauncherTool
 {
-    [McpServerTool, Description("Executes a program or opens a file. Accepts any storage ID — non-local files are copied locally first. Returns { exitCode, stdout, stderr, timedOut }. Set timeoutMs=0 for fire-and-forget (GUI apps, media).")]
+    [McpServerTool, Description("Executes a program or opens a file. Runs executables, opens documents, images, audio, video — any file the OS can handle. Accepts any storage ID — non-local files are copied locally first. Returns { exitCode, stdout, stderr, timedOut }. Set timeoutMs=0 for fire-and-forget (GUI apps, media).")]
     public static async Task<object> StartFile(
         [Description("Storage ID of the file to start.")] string fileId,
         [Description("Shell verb for fire-and-forget mode (timeoutMs=0). Ignored in captured mode.")] string verb = "open",
@@ -172,7 +172,7 @@ public static class FileLauncherTool
         [Description("Working directory for the process.")] string? workingDirectory = null,
         [Description("Text to write to stdin.")] string? stdin = null,
         [Description("Timeout in ms. Default 30000. Set to 0 for fire-and-forget.")] int timeoutMs = 30000,
-        [Description("Whether to overwrite an existing local copy. Default false.")] bool overwrite = false)
+        [Description("Whether to overwrite any existing local copy of the started non-local file. Default false.")] bool overwrite = false)
     {
         try
         {
