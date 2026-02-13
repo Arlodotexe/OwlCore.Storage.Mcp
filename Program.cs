@@ -190,15 +190,13 @@ public static class FileLauncherTool
                 FileName = resolvedPath,
                 UseShellExecute = true,
                 CreateNoWindow = true,
-                // Allow callers to specify a Shell verb (e.g., "print", "edit").
                 Verb = verb ?? "open",
-		Arguments = arguments ?? "",
+                Arguments = arguments ?? "",
             };
 
             var process = Process.Start(processStartInfo);
             if (process != null)
             {
-                // Show both original and resolved paths if they differ
                 if (resolvedPath != filePath)
                     return $"Successfully started file: '{filePath}' (resolved to: '{resolvedPath}')";
                 else
@@ -211,11 +209,90 @@ public static class FileLauncherTool
         }
         catch (McpException)
         {
-            throw; // Re-throw MCP exceptions as-is
+            throw;
         }
         catch (Exception ex)
         {
             throw new McpException($"Failed to start file '{filePath}': {ex.Message}", ex, McpErrorCode.InternalError);
+        }
+    }
+
+    [McpServerTool, Description("Runs an executable with arguments, captures stdout and stderr, and returns the result. Use for CLI tools (e.g., pwsh, git, python). Waits for the process to exit. For opening files in GUI apps, use start_file instead.")]
+    public static async Task<object> RunProcess(
+        [Description("Path to the executable (e.g., '/usr/bin/pwsh', '/usr/bin/git').")] string executable,
+        [Description("Arguments to pass to the executable.")] string arguments = "",
+        [Description("Working directory for the process. Defaults to system temp.")] string? workingDirectory = null,
+        [Description("Text to write to the process's standard input (stdin). Null to not send any input.")] string? stdin = null,
+        [Description("Maximum time in milliseconds to wait for the process to exit. Default 30000 (30s).")] int timeoutMs = 30000)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(executable))
+                throw new McpException("Executable path cannot be empty", McpErrorCode.InvalidParams);
+
+            // Resolve any protocol aliases
+            var resolvedExecutable = ProtocolRegistry.ResolveAliasToFullId(executable);
+
+            var psi = new ProcessStartInfo
+            {
+                FileName = resolvedExecutable,
+                Arguments = arguments ?? "",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                RedirectStandardInput = stdin != null,
+                CreateNoWindow = true,
+                WorkingDirectory = workingDirectory ?? Path.GetTempPath(),
+            };
+
+            using var process = Process.Start(psi);
+            if (process == null)
+                throw new McpException($"Failed to start process: '{executable}'", McpErrorCode.InternalError);
+
+            // Write stdin if provided, then close the stream
+            if (stdin != null)
+            {
+                await process.StandardInput.WriteAsync(stdin);
+                process.StandardInput.Close();
+            }
+
+            // Read stdout and stderr concurrently to avoid deadlocks
+            var stdoutTask = process.StandardOutput.ReadToEndAsync();
+            var stderrTask = process.StandardError.ReadToEndAsync();
+
+            var exited = process.WaitForExit(timeoutMs);
+
+            var stdout = await stdoutTask;
+            var stderr = await stderrTask;
+
+            if (!exited)
+            {
+                try { process.Kill(entireProcessTree: true); } catch { }
+                return new
+                {
+                    exitCode = -1,
+                    stdout,
+                    stderr,
+                    timedOut = true,
+                    error = $"Process timed out after {timeoutMs}ms and was killed."
+                };
+            }
+
+            return new
+            {
+                exitCode = process.ExitCode,
+                stdout,
+                stderr = string.IsNullOrEmpty(stderr) ? null : stderr,
+                timedOut = false,
+            };
+        }
+        catch (McpException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            throw new McpException($"Failed to run '{executable}': {ex.Message}", ex, McpErrorCode.InternalError);
         }
     }
 }
