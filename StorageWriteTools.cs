@@ -122,7 +122,7 @@ public static partial class StorageWriteTools
         }
     }
 
-    [McpServerTool, Description("Writes text content to a file by file ID or path.")]
+    [McpServerTool, Description("Writes text content to a file by file ID or path. The file must already exist — use create_file to create it first.")]
     public static async Task<string> WriteFileText(string fileId, string content)
     {
         var cancellationToken = CancellationToken.None;
@@ -154,7 +154,7 @@ public static partial class StorageWriteTools
         }
     }
 
-    [McpServerTool, Description("Writes text content to a specific line range in a file (1-based indexing). endLine semantics: null=insert at startLine, -1=replace from startLine to EOF, positive N=replace lines startLine through N.")]
+    [McpServerTool, Description("Writes text content to a specific line range in a file (1-based indexing). The file must already exist — use create_file to create it first. endLine semantics: null=insert at startLine, -1=replace from startLine to EOF, positive N=replace lines startLine through N.")]
     public static async Task<string> WriteFileTextRange(string fileId, string content, int startLine, int? endLine = null)
     {
         var cancellationToken = CancellationToken.None;
@@ -228,7 +228,7 @@ public static partial class StorageWriteTools
             return $"Successfully replaced {actualEndLine - startLine + 1} line(s) (lines {startLine}-{actualEndLine}) with {newContentLines.Length} line(s) in file '{file.Name}'. Original: {originalContent.Length} characters, New: {finalContent.Length} characters";
     }
 
-    [McpServerTool, Description("Writes text content to a file with specified encoding by file ID or path.")]
+    [McpServerTool, Description("Writes text content to a file with specified encoding by file ID or path. The file must already exist — use create_file to create it first.")]
     public static async Task<string> WriteFileAsTextWithEncoding(string fileId, string content, string encoding = "UTF-8")
     {
         var cancellationToken = CancellationToken.None;
