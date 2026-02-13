@@ -83,7 +83,9 @@ void Logger_MessageReceived(object? sender, LoggerMessageEventArgs e)
     {
         var msg = $"+{Math.Round((DateTime.Now - startTime).TotalMilliseconds)}ms {Path.GetFileNameWithoutExtension(e.CallerFilePath)} {e.CallerMemberName}  [{e.Level}] {e.Exception} {e.Message}";
         logWriter.WriteLine(msg);
-        Console.WriteLine(msg);    
+
+        if(e.Level == OwlCore.Diagnostics.LogLevel.Error || e.Level == OwlCore.Diagnostics.LogLevel.Critical)
+            Console.Error.WriteLine(msg);    
     }
     finally
     {
@@ -99,8 +101,8 @@ args = customStartupArgs.Split(' ').ToArray();
 */
 
 AppDomain.CurrentDomain.UnhandledException += (object sender, UnhandledExceptionEventArgs e) => Logger.LogError(e.ExceptionObject?.ToString() ?? "Error message not found", e.ExceptionObject as Exception);
-//AppDomain.CurrentDomain.FirstChanceException += (object? sender, System.Runtime.ExceptionServices.FirstChanceExceptionEventArgs e) => Logger.LogError(e.Exception?.ToString() ?? "Error message not found", e.Exception);
-//TaskScheduler.UnobservedTaskException += (object? sender, UnobservedTaskExceptionEventArgs e) => Logger.LogError(e.Exception?.ToString() ?? "Error message not found", e.Exception);
+AppDomain.CurrentDomain.FirstChanceException += (object? sender, System.Runtime.ExceptionServices.FirstChanceExceptionEventArgs e) => Logger.LogError(e.Exception?.ToString() ?? "Error message not found", e.Exception);
+TaskScheduler.UnobservedTaskException += (object? sender, UnobservedTaskExceptionEventArgs e) => { Logger.LogError(e.Exception?.ToString() ?? "Error message not found", e.Exception); e.SetObserved(); };
 
 // Set up KuboBootstrapper and IpfsClient
 var userProfileFolder = new SystemFolder(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
@@ -182,7 +184,7 @@ public enum StartMode
 [McpServerToolType]
 public static class FileLauncherTool
 {
-    [McpServerTool, Description($"Process.Start a specific {nameof(fileId)} using either {nameof(StartMode)}.{nameof(StartMode.ExecuteShellBinary)} to execute a binary with captured stdio (returns exitCode/stdout/stderr) or {nameof(StartMode)}.{nameof(StartMode.LaunchGraphicalApplication)} to open a document/media file in the default GUI app.")]
+    [McpServerTool, Description($"Process.Start a specific {nameof(fileId)} using either {nameof(StartMode)}.{nameof(StartMode.ExecuteShellBinary)} to run/execute a shell binary/command with captured stdio (returns exitCode/stdout/stderr) or {nameof(StartMode)}.{nameof(StartMode.LaunchGraphicalApplication)} to open a document/media file in the default GUI app.")]
     public static async Task<object> Start(
         [Description($"Informs how to Process.Start the given {nameof(fileId)}: either {nameof(StartMode)}.{nameof(StartMode.ExecuteShellBinary)} to execute a binary with given stdin with captured stdio returning exitCode/stdout/stderr or {nameof(StartMode)}.{nameof(StartMode.LaunchGraphicalApplication)} to open a document/media/app in the default GUI handler.")] StartMode fileIdStartMode,
         [Description($"The ID of the binary file to {nameof(StartMode)}.{nameof(StartMode.ExecuteShellBinary)} or {nameof(StartMode)}.{nameof(StartMode.LaunchGraphicalApplication)} per {nameof(fileIdStartMode)}. This MUST be a file (never folder). This MUST NOT contain any {nameof(processArguments)}. File is copied to local storage if non-local file is given.")] string fileId,
@@ -325,7 +327,20 @@ public static class FileLauncherTool
 
             // ExecuteShellBinary: ensure file is executable, then run with captured stdio
             if (!OperatingSystem.IsWindows())
-                ProcessHelpers.EnableExecutablePermissions(localId);
+            {
+                try
+                {
+                    // Skip chmod if file is already executable
+                    var fileInfo = new FileInfo(localId);
+                    if (!fileInfo.UnixFileMode.HasFlag(UnixFileMode.UserExecute))
+                        ProcessHelpers.EnableExecutablePermissions(localId);
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning($"Could not set executable permissions on '{localId}': {ex.Message}");
+                    // Continue anyway — the file may already be executable
+                }
+            }
 
             // Captured mode: redirect stdio, wait for exit
             var psi = new ProcessStartInfo

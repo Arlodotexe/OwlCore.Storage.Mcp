@@ -801,6 +801,10 @@ public static class StorageTools
 
             await EnsureStorableRegistered(startingItemId, cancellationToken);
 
+            // Normalize relative path — ensure it starts with "./" as required by the storage API
+            if (!string.IsNullOrEmpty(relativePath) && !relativePath.StartsWith("./") && !relativePath.StartsWith("../"))
+                relativePath = "./" + relativePath;
+
             if (!_storableRegistry.TryGetValue(startingItemId, out var startingItem))
             {
                 var availableDrives = await GetAvailableDrives();
@@ -1190,6 +1194,8 @@ public static class StorageTools
     [McpServerTool, Description("Lists all supported storage protocols and their capabilities (mfs, memory, http, ipfs, ipns).")]
     public static object[] GetSupportedProtocols()
     {
+        try
+        {
         var protocols = new List<object>();
 
         // Add built-in filesystem support
@@ -1232,6 +1238,13 @@ public static class StorageTools
         }
 
         return protocols.ToArray();
+        }
+        catch (McpException) { throw; }
+        catch (Exception ex)
+        {
+            Logger.LogError($"{nameof(GetSupportedProtocols)} failed: {ex}", ex);
+            throw new McpException($"Failed to get supported protocols: {ex.Message}", ex, McpErrorCode.InternalError);
+        }
     }
 
     [McpServerTool, Description("Mounts an existing folder OR supported archive file as a browsable drive with a custom protocol scheme. The mounted item will appear in GetAvailableDrives() and can be browsed like any other drive.")]
@@ -1345,9 +1358,18 @@ public static class StorageTools
     [McpServerTool, Description("Lists all currently mounted folders and their information.")]
     public static async Task<object[]> GetMountedFolders()
     {
+        try
+        {
         var cancellationToken = CancellationToken.None;
         await ProtocolRegistry.EnsureInitializedAsync(cancellationToken);
         return ProtocolRegistry.GetMountedFolders();
+        }
+        catch (McpException) { throw; }
+        catch (Exception ex)
+        {
+            Logger.LogError($"{nameof(GetMountedFolders)} failed: {ex}", ex);
+            throw new McpException($"Failed to get mounted folders: {ex.Message}", ex, McpErrorCode.InternalError);
+        }
     }
 
     [McpServerTool, Description("Renames a mounted folder's protocol scheme and/or display name. Preserves all existing references and dependencies.")]

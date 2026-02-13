@@ -3,6 +3,7 @@ using ModelContextProtocol;
 using System.ComponentModel;
 using OwlCore.Storage;
 using OwlCore.Kubo;
+using OwlCore.Diagnostics;
 using System.Collections.Concurrent;
 using System.Text;
 using System.IO;
@@ -157,6 +158,8 @@ public static partial class StorageWriteTools
     [McpServerTool, Description("Writes text content to a specific line range in a file (1-based indexing). The file must already exist — use create_file to create it first. endLine semantics: null=insert at startLine, -1=replace from startLine to EOF, positive N=replace lines startLine through N.")]
     public static async Task<string> WriteFileTextRange(string fileId, string content, int startLine, int? endLine = null)
     {
+        try
+        {
         var cancellationToken = CancellationToken.None;
         await StorageTools.EnsureStorableRegistered(fileId, cancellationToken);
 
@@ -226,6 +229,13 @@ public static partial class StorageWriteTools
             return $"Successfully replaced {actualEndLine - startLine + 1} line(s) (lines {startLine} to EOF) with {newContentLines.Length} line(s) in file '{file.Name}'. Original: {originalContent.Length} characters, New: {finalContent.Length} characters";
         else // isReplaceRange
             return $"Successfully replaced {actualEndLine - startLine + 1} line(s) (lines {startLine}-{actualEndLine}) with {newContentLines.Length} line(s) in file '{file.Name}'. Original: {originalContent.Length} characters, New: {finalContent.Length} characters";
+        }
+        catch (McpException) { throw; }
+        catch (Exception ex)
+        {
+            Logger.LogError($"{nameof(WriteFileTextRange)} failed for '{fileId}': {ex}", ex);
+            throw new McpException($"Failed to write text range in '{fileId}': {ex.Message}", ex, McpErrorCode.InternalError);
+        }
     }
 
     [McpServerTool, Description("Writes text content to a file with specified encoding by file ID or path. The file must already exist — use create_file to create it first.")]
