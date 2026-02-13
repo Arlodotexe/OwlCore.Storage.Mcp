@@ -72,11 +72,11 @@ public class IpfsProtocolHandler : IProtocolHandler
         return $"{parentId.TrimEnd('/')}/{itemName}";
     }
 
-    public Task<object?> GetDriveInfoAsync(string rootUri, CancellationToken cancellationToken = default)
+    public Task<DriveInfoResult?> GetDriveInfoAsync(string rootUri, CancellationToken cancellationToken = default)
     {
         // IPFS protocol doesn't have drive info since it doesn't have a global root
         // Individual IPFS resources don't have drive-like properties
-        return Task.FromResult<object?>(null);
+        return Task.FromResult<DriveInfoResult?>(null);
     }
 
     public bool NeedsRegistration(string id)

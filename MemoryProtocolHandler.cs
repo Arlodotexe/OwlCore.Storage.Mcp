@@ -38,20 +38,18 @@ public class MemoryProtocolHandler : IProtocolHandler
         return $"{parentId.TrimEnd('/')}/{itemName}";
     }
 
-    public Task<object?> GetDriveInfoAsync(string rootUri, CancellationToken cancellationToken = default)
+    public Task<DriveInfoResult?> GetDriveInfoAsync(string rootUri, CancellationToken cancellationToken = default)
     {
         // Simple drive info for memory storage
-        return Task.FromResult<object?>(new
-        {
-            id = rootUri,
-            name = "Memory Storage",
-            type = "memory",
-            driveType = "Ram",
-            isReady = true,
-            totalSize = -1L, // Memory doesn't have a fixed total size
-            availableFreeSpace = -1L, // Memory availability varies
-            estimatedUsage = 0L // Could calculate this if needed
-        });
+        return Task.FromResult<DriveInfoResult?>(new DriveInfoResult(
+            Id: rootUri,
+            Name: "Memory Storage",
+            Type: "memory",
+            DriveType: "Ram",
+            IsReady: true,
+            TotalSize: -1L,
+            AvailableFreeSpace: -1L
+        ));
     }
 
     public bool NeedsRegistration(string id)

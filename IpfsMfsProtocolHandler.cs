@@ -36,22 +36,21 @@ public class IpfsMfsProtocolHandler : IProtocolHandler
         return $"{parentId}/{itemName}";
     }
 
-    public async Task<object?> GetDriveInfoAsync(string rootUri, CancellationToken cancellationToken = default)
+    public async Task<DriveInfoResult?> GetDriveInfoAsync(string rootUri, CancellationToken cancellationToken = default)
     {
         try
         {
             var repoStats = await _client.Stats.RepositoryAsync(cancellationToken);
             
-            return new
-            {
-                id = rootUri,
-                name = "IPFS MFS Root",
-                type = "mfs",
-                driveType = "NetworkDrive",
-                isReady = true,
-                totalSize = (long)repoStats.StorageMax,
-                availableFreeSpace = (long)(repoStats.StorageMax - repoStats.RepoSize)
-            };
+            return new DriveInfoResult(
+                Id: rootUri,
+                Name: "IPFS MFS Root",
+                Type: "mfs",
+                DriveType: "NetworkDrive",
+                IsReady: true,
+                TotalSize: (long)repoStats.StorageMax,
+                AvailableFreeSpace: (long)(repoStats.StorageMax - repoStats.RepoSize)
+            );
         }
         catch (Exception ex)
         {

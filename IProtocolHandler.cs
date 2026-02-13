@@ -37,7 +37,7 @@ public interface IProtocolHandler
     /// <param name="rootUri">The root URI</param>
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>Drive information object, or null if this protocol doesn't have browsable roots</returns>
-    Task<object?> GetDriveInfoAsync(string rootUri, CancellationToken cancellationToken = default);
+    Task<DriveInfoResult?> GetDriveInfoAsync(string rootUri, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Checks if this protocol supports browsable roots (shows up in GetAvailableDrives)

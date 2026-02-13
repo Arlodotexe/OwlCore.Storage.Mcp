@@ -39,23 +39,20 @@ public class S3ProtocolHandler : IProtocolHandler
         return $"{parentId}/{itemName}";
     }
 
-    public Task<object?> GetDriveInfoAsync(string rootUri, CancellationToken cancellationToken = default)
+    public Task<DriveInfoResult?> GetDriveInfoAsync(string rootUri, CancellationToken cancellationToken = default)
     {
         // In a real implementation, you'd query S3 for bucket information
         var bucketName = ExtractBucketName(rootUri);
         
-        var result = new
-        {
-            id = rootUri,
-            name = $"S3 Bucket: {bucketName}",
-            type = "s3",
-            driveType = "NetworkDrive",
-            isReady = true,
-            totalSize = -1L, // S3 doesn't have size limits
-            availableFreeSpace = -1L
-        };
-
-        return Task.FromResult<object?>(result);
+        return Task.FromResult<DriveInfoResult?>(new DriveInfoResult(
+            Id: rootUri,
+            Name: $"S3 Bucket: {bucketName}",
+            Type: "s3",
+            DriveType: "NetworkDrive",
+            IsReady: true,
+            TotalSize: -1L,
+            AvailableFreeSpace: -1L
+        ));
     }
 
     public bool NeedsRegistration(string id)
@@ -117,23 +114,20 @@ public class AzureBlobProtocolHandler : IProtocolHandler
         return $"{parentId}/{itemName}";
     }
 
-    public Task<object?> GetDriveInfoAsync(string rootUri, CancellationToken cancellationToken = default)
+    public Task<DriveInfoResult?> GetDriveInfoAsync(string rootUri, CancellationToken cancellationToken = default)
     {
         var accountName = ExtractAccountName(rootUri);
         var containerName = ExtractContainerName(rootUri);
         
-        var result = new
-        {
-            id = rootUri,
-            name = $"Azure Blob: {accountName}/{containerName}",
-            type = "azure-blob",
-            driveType = "NetworkDrive",
-            isReady = true,
-            totalSize = -1L, // Azure Blob doesn't have fixed size limits
-            availableFreeSpace = -1L
-        };
-
-        return Task.FromResult<object?>(result);
+        return Task.FromResult<DriveInfoResult?>(new DriveInfoResult(
+            Id: rootUri,
+            Name: $"Azure Blob: {accountName}/{containerName}",
+            Type: "azure-blob",
+            DriveType: "NetworkDrive",
+            IsReady: true,
+            TotalSize: -1L,
+            AvailableFreeSpace: -1L
+        ));
     }
 
     public bool NeedsRegistration(string id)

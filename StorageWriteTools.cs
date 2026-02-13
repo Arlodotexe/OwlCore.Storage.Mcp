@@ -13,13 +13,12 @@ using SharpCompress.Common;
 
 namespace OwlCore.Storage.Mcp;
 
-[McpServerToolType]
 public static partial class StorageWriteTools
 {
     private static readonly ConcurrentDictionary<string, IStorable> _storableRegistry = StorageTools._storableRegistry;
 
-    [McpServerTool, Description("Creates a new folder in the specified parent folder by ID or path.")]
-    public static async Task<object> CreateFolder(string parentFolderId, string folderName)
+    [Description("Creates a new folder in the specified parent folder by ID or path.")]
+    public static async Task<StorableItemResult> CreateFolder(string parentFolderId, string folderName)
     {
         var cancellationToken = CancellationToken.None;
         try
@@ -39,12 +38,11 @@ public static partial class StorageWriteTools
             string newFolderId = ProtocolRegistry.IsCustomProtocol(parentFolderId) ? StorageTools.CreateCustomItemId(parentFolderId, folderName) : newFolder.Id;
             _storableRegistry[newFolderId] = newFolder;
 
-            return new
-            {
-                id = newFolderId,
-                name = newFolder.Name,
-                type = "folder"
-            };
+            return new StorableItemResult(
+                Id: newFolderId,
+                Name: newFolder.Name,
+                Type: "folder"
+            );
         }
         catch (McpException)
         {
@@ -56,8 +54,8 @@ public static partial class StorageWriteTools
         }
     }
 
-    [McpServerTool, Description("Creates a new file in the specified parent folder by ID or path.")]
-    public static async Task<object> CreateFile(string parentFolderId, string fileName, bool overwrite = false)
+    [Description("Creates a new file in the specified parent folder by ID or path.")]
+    public static async Task<StorableItemWithArchiveTypeResult> CreateFile(string parentFolderId, string fileName, bool overwrite = false)
     {
         var cancellationToken = CancellationToken.None;
         try
@@ -105,13 +103,12 @@ public static partial class StorageWriteTools
             string newFileId = ProtocolRegistry.IsCustomProtocol(parentFolderId) ? StorageTools.CreateCustomItemId(parentFolderId, fileName) : newFile.Id;
             _storableRegistry[newFileId] = newFile;
 
-            return new
-            {
-                id = newFileId,
-                name = newFile.Name,
-                type = "file",
-                archiveType = archiveType?.ToString()
-            };
+            return new StorableItemWithArchiveTypeResult(
+                Id: newFileId,
+                Name: newFile.Name,
+                Type: "file",
+                ArchiveType: archiveType?.ToString()
+            );
         }
         catch (McpException)
         {
@@ -123,7 +120,7 @@ public static partial class StorageWriteTools
         }
     }
 
-    [McpServerTool, Description("Writes text content to a file by file ID or path. The file must already exist — use create_file to create it first.")]
+    [Description("Writes text content to a file by file ID or path. The file must already exist — use create_file to create it first.")]
     public static async Task<string> WriteFileText(string fileId, string content)
     {
         var cancellationToken = CancellationToken.None;
@@ -155,7 +152,7 @@ public static partial class StorageWriteTools
         }
     }
 
-    [McpServerTool, Description("Writes text content to a specific line range in a file (1-based indexing). The file must already exist — use create_file to create it first. endLine semantics: null=insert at startLine, -1=replace from startLine to EOF, positive N=replace lines startLine through N.")]
+    [Description("Writes text content to a specific line range in a file (1-based indexing). The file must already exist — use create_file to create it first. endLine semantics: null=insert at startLine, -1=replace from startLine to EOF, positive N=replace lines startLine through N.")]
     public static async Task<string> WriteFileTextRange(string fileId, string content, int startLine, int? endLine = null)
     {
         try
@@ -238,7 +235,7 @@ public static partial class StorageWriteTools
         }
     }
 
-    [McpServerTool, Description("Writes text content to a file with specified encoding by file ID or path. The file must already exist — use create_file to create it first.")]
+    [Description("Writes text content to a file with specified encoding by file ID or path. The file must already exist — use create_file to create it first.")]
     public static async Task<string> WriteFileAsTextWithEncoding(string fileId, string content, string encoding = "UTF-8")
     {
         var cancellationToken = CancellationToken.None;
@@ -271,7 +268,7 @@ public static partial class StorageWriteTools
         }
     }
 
-    [McpServerTool, Description("Deletes a file or folder by ID or path from its parent folder.")]
+    [Description("Deletes a file or folder by ID or path from its parent folder.")]
     public static async Task<string> DeleteItem(string parentFolderId, string itemName)
     {
         var cancellationToken = CancellationToken.None;
@@ -304,8 +301,8 @@ public static partial class StorageWriteTools
         }
     }
 
-    [McpServerTool, Description("Creates a copy of any file or folder in the specified target folder. Works across all supported protocols.")]
-    public static async Task<object> CopyItem(string sourceItemId, string targetParentFolderId, string? newName = null, bool overwrite = false)
+    [Description("Creates a copy of any file or folder in the specified target folder. Works across all supported protocols.")]
+    public static async Task<StorableItemResult> CopyItem(string sourceItemId, string targetParentFolderId, string? newName = null, bool overwrite = false)
     {
         var cancellationToken = CancellationToken.None;
         try
@@ -343,12 +340,11 @@ public static partial class StorageWriteTools
                     copiedFile.Id;
                 _storableRegistry[newFileId] = copiedFile;
 
-                return new
-                {
-                    id = newFileId,
-                    name = copiedFile.Name,
-                    type = "file"
-                };
+                return new StorableItemResult(
+                    Id: newFileId,
+                    Name: copiedFile.Name,
+                    Type: "file"
+                );
             }
             else if (sourceItem is IFolder sourceFolder)
             {
@@ -384,12 +380,11 @@ public static partial class StorageWriteTools
                     targetFolder.Id;
                 _storableRegistry[newFolderId] = targetFolder;
 
-                return new
-                {
-                    id = newFolderId,
-                    name = targetFolder.Name,
-                    type = "folder"
-                };
+                return new StorableItemResult(
+                    Id: newFolderId,
+                    Name: targetFolder.Name,
+                    Type: "folder"
+                );
             }
             else
             {
@@ -406,8 +401,8 @@ public static partial class StorageWriteTools
         }
     }
 
-    [McpServerTool, Description("Moves a file or folder from source folder to target folder using efficient move operations.")]
-    public static async Task<object> MoveItem(string sourceItemId, string sourceFolderId, string targetParentFolderId, string? newName = null, bool overwrite = false)
+    [Description("Moves a file or folder from source folder to target folder using efficient move operations.")]
+    public static async Task<StorableItemResult> MoveItem(string sourceItemId, string sourceFolderId, string targetParentFolderId, string? newName = null, bool overwrite = false)
     {
         var cancellationToken = CancellationToken.None;
         try
@@ -448,12 +443,11 @@ public static partial class StorageWriteTools
                     movedFile.Id;
                 _storableRegistry[newFileId] = movedFile;
 
-                return new
-                {
-                    id = newFileId,
-                    name = movedFile.Name,
-                    type = "file"
-                };
+                return new StorableItemResult(
+                    Id: newFileId,
+                    Name: movedFile.Name,
+                    Type: "file"
+                );
             }
             else if (sourceItem is IFolder sourceFolder && sourceItem is IStorableChild storableChild)
             {
@@ -494,12 +488,11 @@ public static partial class StorageWriteTools
                     targetFolder.Id;
                 _storableRegistry[newFolderId] = targetFolder;
 
-                return new
-                {
-                    id = newFolderId,
-                    name = targetFolder.Name,
-                    type = "folder"
-                };
+                return new StorableItemResult(
+                    Id: newFolderId,
+                    Name: targetFolder.Name,
+                    Type: "folder"
+                );
             }
             else
             {
@@ -518,8 +511,8 @@ public static partial class StorageWriteTools
 
     
 
-    [McpServerTool, Description("Creates any missing folders along a relative path from a starting item. If the last segment contains a dot and no trailing slash, it's treated as a file and the parent of the leaf is created. Supports '.' and '..' segments.")]
-    public static async Task<object> CreateRelativeFolderPath(string startingItemId, string relativePath, bool overwrite = false)
+    [Description("Creates any missing folders along a relative path from a starting item. If the last segment contains a dot and no trailing slash, it's treated as a file and the parent of the leaf is created. Supports '.' and '..' segments.")]
+    public static async Task<StorableItemResult> CreateRelativeFolderPath(string startingItemId, string relativePath, bool overwrite = false)
     {
         var cancellationToken = CancellationToken.None;
         try
@@ -544,12 +537,11 @@ public static partial class StorageWriteTools
             externalId = StorageTools.EnsureFolderTrailingSlash(externalId, resultFolder);
             _storableRegistry[externalId] = resultFolder;
 
-            return new
-            {
-                id = externalId,
-                name = resultFolder.Name,
-                type = "folder"
-            };
+            return new StorableItemResult(
+                Id: externalId,
+                Name: resultFolder.Name,
+                Type: "folder"
+            );
         }
         catch (McpException)
         {

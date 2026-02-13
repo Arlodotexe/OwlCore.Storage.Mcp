@@ -12,7 +12,6 @@ using CommunityToolkit.Diagnostics;
 
 namespace OwlCore.Storage.Mcp;
 
-[McpServerToolType]
 public static class StorageTools
 {
     internal static readonly ConcurrentDictionary<string, IStorable> _storableRegistry = new();
@@ -303,10 +302,10 @@ public static class StorageTools
         return ProtocolRegistry.CreateCustomItemId(parentId, itemName);
     }
 
-    [McpServerTool, Description("Gets the available browseable drives. Use these drive IDs as starting points for GetItemByRelativePath navigation.")]
-    public static async Task<object[]> GetAvailableDrives()
+    [Description("Gets the available browseable drives. Use these drive IDs as starting points for GetItemByRelativePath navigation.")]
+    public static async Task<DriveInfoResult[]> GetAvailableDrives()
     {
-        var driveInfos = new List<object>();
+        var driveInfos = new List<DriveInfoResult>();
         var cancellationToken = CancellationToken.None;
 
         // Get all available drives
@@ -320,16 +319,15 @@ public static class StorageTools
                 _storableRegistry[drive.RootDirectory.FullName] = driveFolder;
                 
                 // Add drive info to result
-                driveInfos.Add(new
-                {
-                    id = drive.RootDirectory.FullName,
-                    name = !string.IsNullOrEmpty(drive.VolumeLabel) ? $"{drive.Name} ({drive.VolumeLabel})" : drive.Name,
-                    type = "drive",
-                    driveType = drive.DriveType.ToString(),
-                    isReady = drive.IsReady,
-                    totalSize = drive.IsReady ? drive.TotalSize : 0,
-                    availableFreeSpace = drive.IsReady ? drive.AvailableFreeSpace : 0
-                });
+                driveInfos.Add(new DriveInfoResult(
+                    Id: drive.RootDirectory.FullName,
+                    Name: !string.IsNullOrEmpty(drive.VolumeLabel) ? $"{drive.Name} ({drive.VolumeLabel})" : drive.Name,
+                    Type: "drive",
+                    DriveType: drive.DriveType.ToString(),
+                    IsReady: drive.IsReady,
+                    TotalSize: drive.IsReady ? drive.TotalSize : 0,
+                    AvailableFreeSpace: drive.IsReady ? drive.AvailableFreeSpace : 0
+                ));
             }
             catch
             {
@@ -345,7 +343,15 @@ public static class StorageTools
             var mountedFolders = ProtocolRegistry.GetMountedFolders();
             foreach (var mount in mountedFolders)
             {
-                driveInfos.Add(mount);
+                driveInfos.Add(new DriveInfoResult(
+                    Id: mount.RootUri,
+                    Name: $"Mounted: {mount.MountName}",
+                    Type: "mounted-folder",
+                    DriveType: "NetworkDrive",
+                    IsReady: true,
+                    TotalSize: -1L,
+                    AvailableFreeSpace: -1L
+                ));
             }
         }
         catch (Exception ex)
@@ -392,8 +398,8 @@ public static class StorageTools
         return driveInfos.ToArray();
     }
 
-    [McpServerTool, Description($"Lists all items in a folder by ID or path. Returns array of items with their IDs, names, and types. Use ${nameof(GetFolderFiles)} or {nameof(GetFolderSubfolders)} to filter by type. Prefer {nameof(GetItemByRelativePath)} for hierarchical or path-based navigation.")]
-    public static async Task<object> GetFolderItems(string folderId, [Description("Maximum number of results to return. Default 50.")] int maxResults = 50, [Description("Number of items to skip for pagination. Default 0.")] int skip = 0)
+    [Description($"Lists all items in a folder by ID or path. Returns array of items with their IDs, names, and types. Use ${nameof(GetFolderFiles)} or {nameof(GetFolderSubfolders)} to filter by type. Prefer {nameof(GetItemByRelativePath)} for hierarchical or path-based navigation.")]
+    public static async Task<PaginatedItemsResult> GetFolderItems(string folderId, [Description("Maximum number of results to return. Default 50.")] int maxResults = 50, [Description("Number of items to skip for pagination. Default 0.")] int skip = 0)
     {
         var cancellationToken = CancellationToken.None;
 
@@ -413,7 +419,7 @@ public static class StorageTools
             if (!_storableRegistry.TryGetValue(folderId, out var registeredItem) || registeredItem is not IFolder folder)
                 throw new McpException($"Folder with ID '{folderId}' not found", McpErrorCode.InvalidParams);
 
-            var items = new List<object>();
+            var items = new List<StorableItemResult>();
             int index = 0;
             int collected = 0;
             await foreach (var item in folder.GetItemsAsync())
@@ -428,12 +434,12 @@ public static class StorageTools
 
                 if (index >= skip && collected < maxResults)
                 {
-                    items.Add(new { id = externalId, name = item.Name, type = item switch { IFile => "file", IFolder => "folder", _ => "unknown" } });
+                    items.Add(new StorableItemResult(Id: externalId, Name: item.Name, Type: item switch { IFile => "file", IFolder => "folder", _ => "unknown" }));
                     collected++;
                 }
                 index++;
             }
-            return new { items = items.ToArray(), totalCount = index, hasMore = index > skip + collected };
+            return new PaginatedItemsResult(Items: items.ToArray(), TotalCount: index, HasMore: index > skip + collected);
         }
         catch (McpException) { throw; }
         catch (Exception ex)
@@ -442,8 +448,8 @@ public static class StorageTools
         }
     }
 
-    [McpServerTool, Description("Lists only files in a folder by ID or path. Returns array of file items.")]
-    public static async Task<object> GetFolderFiles(string folderId, [Description("Maximum number of results to return. Default 50.")] int maxResults = 50, [Description("Number of items to skip for pagination. Default 0.")] int skip = 0)
+    [Description("Lists only files in a folder by ID or path. Returns array of file items.")]
+    public static async Task<PaginatedItemsResult> GetFolderFiles(string folderId, [Description("Maximum number of results to return. Default 50.")] int maxResults = 50, [Description("Number of items to skip for pagination. Default 0.")] int skip = 0)
     {
         var cancellationToken = CancellationToken.None;
         try
@@ -461,8 +467,7 @@ public static class StorageTools
             if (!_storableRegistry.TryGetValue(folderId, out var registeredItem) || registeredItem is not IFolder folder)
                 throw new McpException($"Folder with ID '{folderId}' not found", McpErrorCode.InvalidParams);
 
-            var files = new List<object>();
-            int index = 0;
+            var files = new List<StorableItemResult>();            int index = 0;
             int collected = 0;
             await foreach (var file in folder.GetFilesAsync())
             {
@@ -477,18 +482,13 @@ public static class StorageTools
 
                 if (index >= skip && collected < maxResults)
                 {
-                    files.Add(new
-                    {
-                        id = externalId,
-                        name = file.Name,
-                        type = "file"
-                    });
+                    files.Add(new StorableItemResult(Id: externalId, Name: file.Name, Type: "file"));
                     collected++;
                 }
                 index++;
             }
 
-            return new { items = files.ToArray(), totalCount = index, hasMore = index > skip + collected };
+            return new PaginatedItemsResult(Items: files.ToArray(), TotalCount: index, HasMore: index > skip + collected);
         }
         catch (McpException)
         {
@@ -500,8 +500,8 @@ public static class StorageTools
         }
     }
 
-    [McpServerTool, Description("Lists only folders in a folder by ID or path. Returns array of folder items.")]
-    public static async Task<object> GetFolderSubfolders(string folderId, [Description("Maximum number of results to return. Default 50.")] int maxResults = 50, [Description("Number of items to skip for pagination. Default 0.")] int skip = 0)
+    [Description("Lists only folders in a folder by ID or path. Returns array of folder items.")]
+    public static async Task<PaginatedItemsResult> GetFolderSubfolders(string folderId, [Description("Maximum number of results to return. Default 50.")] int maxResults = 50, [Description("Number of items to skip for pagination. Default 0.")] int skip = 0)
     {
         var cancellationToken = CancellationToken.None;
         try
@@ -519,7 +519,7 @@ public static class StorageTools
             if (!_storableRegistry.TryGetValue(folderId, out var registeredItem) || registeredItem is not IFolder folder)
                 throw new McpException($"Folder with ID '{folderId}' not found", McpErrorCode.InvalidParams);
 
-            var folders = new List<object>();
+            var folders = new List<StorableItemResult>();
             int index = 0;
             int collected = 0;
             await foreach (var subfolder in folder.GetFoldersAsync())
@@ -537,18 +537,13 @@ public static class StorageTools
 
                 if (index >= skip && collected < maxResults)
                 {
-                    folders.Add(new
-                    {
-                        id = externalId,
-                        name = subfolder.Name,
-                        type = "folder"
-                    });
+                    folders.Add(new StorableItemResult(Id: externalId, Name: subfolder.Name, Type: "folder"));
                     collected++;
                 }
                 index++;
             }
 
-            return new { items = folders.ToArray(), totalCount = index, hasMore = index > skip + collected };
+            return new PaginatedItemsResult(Items: folders.ToArray(), TotalCount: index, HasMore: index > skip + collected);
         }
         catch (McpException)
         {
@@ -560,8 +555,8 @@ public static class StorageTools
         }
     }
 
-    [McpServerTool, Description("Gets an item with a known ID by recursively searching through a folder hierarchy. The targetItemId must be a known storable ID, not a filename or search term.")]
-    public static async Task<object?> GetItemRecursively(string folderId, string targetItemId)
+    [Description("Gets an item with a known ID by recursively searching through a folder hierarchy. The targetItemId must be a known storable ID, not a filename or search term.")]
+    public static async Task<StorableItemResult?> GetItemRecursively(string folderId, string targetItemId)
     {
         var cancellationToken = CancellationToken.None;
         try
@@ -584,17 +579,16 @@ public static class StorageTools
                 externalId = EnsureFolderTrailingSlash(externalId, foundItem);
                 _storableRegistry[externalId] = foundItem;
 
-                return new
-                {
-                    id = externalId,
-                    name = foundItem.Name,
-                    type = foundItem switch
+                return new StorableItemResult(
+                    Id: externalId,
+                    Name: foundItem.Name,
+                    Type: foundItem switch
                     {
                         IFile => "file",
                         IFolder => "folder",
                         _ => "unknown"
                     }
-                };
+                );
             }
             catch (FileNotFoundException)
             {
@@ -612,8 +606,8 @@ public static class StorageTools
     }
 
 
-    [McpServerTool, Description("Searches for files and folders by name pattern within a folder hierarchy. Uses depth-first recursive traversal. Supports glob patterns (e.g., '*.cs', 'src/**/*.json') and regex patterns.")]
-    public static async Task<object[]> FindAll(
+    [Description("Searches for files and folders by name pattern within a folder hierarchy. Uses depth-first recursive traversal. Supports glob patterns (e.g., '*.cs', 'src/**/*.json') and regex patterns.")]
+    public static async Task<FindResultWithMatches[]> FindAll(
         [Description("The ID of the folder to search within.")] string folderId,
         [Description("Glob pattern to match against item names. Use '*' for any chars, '?' for single char, '**/' for recursive directory match. Examples: '*.cs', 'test_*', '**/*.json'.")] string? nameGlob = null,
         [Description("Regex pattern to search within file contents. Only files are content-searched. Matched lines are returned with line numbers.")] string? contentRegex = null,
@@ -674,7 +668,7 @@ public static class StorageTools
             };
 
             var recursive = new DepthFirstRecursiveFolder(folder);
-            var results = new List<object>();
+            var results = new List<FindResultWithMatches>();
 
             await foreach (var item in recursive.GetItemsAsync(storableType, cancellationToken))
             {
@@ -706,18 +700,18 @@ public static class StorageTools
                     {
                         var content = await file.ReadTextAsync(CancellationToken.None);
                         var lines2 = content.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
-                        var matches = new List<object>();
+                        var matches = new List<ContentMatchLine>();
 
                         for (int i = 0; i < lines2.Length; i++)
                         {
                             if (contentRegexCompiled.IsMatch(lines2[i]))
-                                matches.Add(new { line = i + 1, text = lines2[i].TrimEnd() });
+                                matches.Add(new ContentMatchLine(Line: i + 1, Text: lines2[i].TrimEnd()));
                         }
 
                         if (matches.Count == 0)
                             continue;
 
-                        results.Add(new { id = externalId, name = item.Name, type = typeStr, matches });
+                        results.Add(new FindResultWithMatches(Id: externalId, Name: item.Name, Type: typeStr, Matches: matches.ToArray()));
                     }
                     catch
                     {
@@ -730,7 +724,7 @@ public static class StorageTools
                 }
                 else
                 {
-                    results.Add(new { id = externalId, name = item.Name, type = typeStr });
+                    results.Add(new FindResultWithMatches(Id: externalId, Name: item.Name, Type: typeStr));
                 }
 
                 if (results.Count >= maxResults)
@@ -790,8 +784,8 @@ public static class StorageTools
         return sb.ToString();
     }
 
-    [McpServerTool, Description("Navigates to an item using a relative path from a starting item.")]
-    public static async Task<object> GetItemByRelativePath(string startingItemId, string relativePath)
+    [Description("Navigates to an item using a relative path from a starting item.")]
+    public static async Task<StorableItemResult> GetItemByRelativePath(string startingItemId, string relativePath)
     {
         var cancellationToken = CancellationToken.None;
         try
@@ -837,17 +831,16 @@ public static class StorageTools
             externalId = EnsureFolderTrailingSlash(externalId, targetItem);
             _storableRegistry[externalId] = targetItem;
 
-            return new
-            {
-                id = externalId,
-                name = targetItem.Name,
-                type = targetItem switch
+            return new StorableItemResult(
+                Id: externalId,
+                Name: targetItem.Name,
+                Type: targetItem switch
                 {
                     IFile => "file",
                     IFolder => "folder",
                     _ => "unknown"
                 }
-            };
+            );
         }
         catch (McpException)
         {
@@ -859,7 +852,7 @@ public static class StorageTools
         }
     }
 
-    [McpServerTool, Description("Gets a relative path from a folder to a child item and registers the chain along that path.")]
+    [Description("Gets a relative path from a folder to a child item and registers the chain along that path.")]
     public static async Task<string> GetRelativePath(string fromFolderId, string toItemId)
     {
         var cancellationToken = CancellationToken.None;
@@ -901,7 +894,7 @@ public static class StorageTools
         }
     }
 
-    [McpServerTool, Description("Reads the entire content of a file as text. Returns the full file — no truncation. For large files, use get_storable_info first to check sizeBytes/lineCount, then use read_file_text_range to read specific line ranges instead.")]
+    [Description("Reads the entire content of a file as text. Returns the full file — no truncation. For large files, use get_storable_info first to check sizeBytes/lineCount, then use read_file_text_range to read specific line ranges instead.")]
     public static async Task<string> ReadFileAsText([Description("The ID of the file to read.")] string fileId, string encoding = "UTF-8")
     {
         var cancellationToken = CancellationToken.None;
@@ -933,7 +926,7 @@ public static class StorageTools
         }
     }
 
-    [McpServerTool, Description("Reads file text from http, https, local storage, memory, ipfs, ipns, mfs, and all other supported protocols.")]
+    [Description("Reads file text from http, https, local storage, memory, ipfs, ipns, mfs, and all other supported protocols.")]
     public static async Task<string> ReadFileTextRange([Description("The ID of the file to read.")] string fileId, [Description("1-based indexing.")] int startLine, [Description("Omit this to read to end of file.")] int? endLine = null, int? columnLimit = 1000)
     {
         var cancellationToken = CancellationToken.None;
@@ -991,8 +984,8 @@ public static class StorageTools
         }
     }
 
-    [McpServerTool, Description("Gets information about a seen storable item by ID, path, or URL")]
-    public static async Task<object?> GetStorableInfo(string id)
+    [Description("Gets information about a seen storable item by ID, path, or URL")]
+    public static async Task<StorableInfoResult?> GetStorableInfo(string id)
     {
         var cancellationToken = CancellationToken.None;
         try
@@ -1037,14 +1030,13 @@ public static class StorageTools
                 }
             }
 
-            return new
-            {
-                id = storable.Id,
-                name = storable.Name,
-                type = typeStr,
-                sizeBytes,
-                lineCount,
-            };
+            return new StorableInfoResult(
+                Id: storable.Id,
+                Name: storable.Name,
+                Type: typeStr,
+                SizeBytes: sizeBytes,
+                LineCount: lineCount
+            );
         }
         catch (McpException)
         {
@@ -1056,8 +1048,8 @@ public static class StorageTools
         }
     }
 
-    [McpServerTool, Description("Gets the root folder of a storage item by tracing up the parent hierarchy.")]
-    public static async Task<object?> GetRootFolder(string itemId)
+    [Description("Gets the root folder of a storage item by tracing up the parent hierarchy.")]
+    public static async Task<StorableItemResult?> GetRootFolder(string itemId)
     {
         var cancellationToken = CancellationToken.None;
         try
@@ -1081,12 +1073,11 @@ public static class StorageTools
             externalId = EnsureFolderTrailingSlash(externalId, rootFolder);
             _storableRegistry[externalId] = rootFolder;
 
-            return new
-            {
-                id = externalId,
-                name = rootFolder.Name,
-                type = "folder"
-            };
+            return new StorableItemResult(
+                Id: externalId,
+                Name: rootFolder.Name,
+                Type: "folder"
+            );
         }
         catch (McpException)
         {
@@ -1098,8 +1089,8 @@ public static class StorageTools
         }
     }
 
-    [McpServerTool, Description("Gets a specific item by ID from a folder.")]
-    public static async Task<object> GetItemById(string folderId, string itemId)
+    [Description("Gets a specific item by ID from a folder.")]
+    public static async Task<StorableItemResult> GetItemById(string folderId, string itemId)
     {
         var cancellationToken = CancellationToken.None;
         try
@@ -1122,17 +1113,16 @@ public static class StorageTools
                 externalId = EnsureFolderTrailingSlash(externalId, foundItem);
                 _storableRegistry[externalId] = foundItem;
 
-                return new
-                {
-                    id = externalId,
-                    name = foundItem.Name,
-                    type = foundItem switch
+                return new StorableItemResult(
+                    Id: externalId,
+                    Name: foundItem.Name,
+                    Type: foundItem switch
                     {
                         IFile => "file",
                         IFolder => "folder",
                         _ => "unknown"
                     }
-                };
+                );
             }
             catch (FileNotFoundException)
             {
@@ -1149,8 +1139,8 @@ public static class StorageTools
         }
     }
 
-    [McpServerTool, Description("Gets the parent folder of a storage item.")]
-    public static async Task<object?> GetParentFolder(string itemId)
+    [Description("Gets the parent folder of a storage item.")]
+    public static async Task<StorableItemResult?> GetParentFolder(string itemId)
     {
         var cancellationToken = CancellationToken.None;
         try
@@ -1174,12 +1164,11 @@ public static class StorageTools
             externalId = EnsureFolderTrailingSlash(externalId, parentFolder);
             _storableRegistry[externalId] = parentFolder;
 
-            return new
-            {
-                id = externalId,
-                name = parentFolder.Name,
-                type = "folder"
-            };
+            return new StorableItemResult(
+                Id: externalId,
+                Name: parentFolder.Name,
+                Type: "folder"
+            );
         }
         catch (McpException)
         {
@@ -1191,23 +1180,22 @@ public static class StorageTools
         }
     }
 
-    [McpServerTool, Description("Lists all supported storage protocols and their capabilities (mfs, memory, http, ipfs, ipns).")]
-    public static object[] GetSupportedProtocols()
+    [Description("Lists all supported storage protocols and their capabilities (mfs, memory, http, ipfs, ipns).")]
+    public static ProtocolInfoResult[] GetSupportedProtocols()
     {
         try
         {
-        var protocols = new List<object>();
+        var protocols = new List<ProtocolInfoResult>();
 
         // Add built-in filesystem support
-        protocols.Add(new
-        {
-            scheme = "file",
-            name = "Local File System",
-            type = "filesystem",
-            hasBrowsableRoot = true,
-            supportsDirectResources = false,
-            description = "Local disk drives and folders"
-        });
+        protocols.Add(new ProtocolInfoResult(
+            Scheme: "file",
+            Name: "Local File System",
+            Type: "filesystem",
+            HasBrowsableRoot: true,
+            SupportsDirectResources: false,
+            Description: "Local disk drives and folders"
+        ));
 
         // Add custom protocols
         foreach (var protocolScheme in ProtocolRegistry.GetRegisteredProtocols())
@@ -1217,14 +1205,13 @@ public static class StorageTools
             
             if (protocolHandler != null)
             {
-                protocols.Add(new
-                {
-                    scheme = protocolScheme,
-                    name = protocolScheme.ToUpper() + " Protocol",
-                    type = protocolHandler.HasBrowsableRoot ? "filesystem" : "resource",
-                    hasBrowsableRoot = protocolHandler.HasBrowsableRoot,
-                    supportsDirectResources = !protocolHandler.HasBrowsableRoot,
-                    description = protocolScheme switch
+                protocols.Add(new ProtocolInfoResult(
+                    Scheme: protocolScheme,
+                    Name: protocolScheme.ToUpper() + " Protocol",
+                    Type: protocolHandler.HasBrowsableRoot ? "filesystem" : "resource",
+                    HasBrowsableRoot: protocolHandler.HasBrowsableRoot,
+                    SupportsDirectResources: !protocolHandler.HasBrowsableRoot,
+                    Description: protocolScheme switch
                     {
                         "mfs" => "IPFS Mutable File System - browsable IPFS storage",
                         "memory" => "In-memory temporary storage for testing",
@@ -1233,7 +1220,7 @@ public static class StorageTools
                         "ipns" => "IPNS names that resolve to IPFS content - files or folders accessible by name",
                         _ => $"Custom {protocolScheme} protocol"
                     }
-                });
+                ));
             }
         }
 
@@ -1247,8 +1234,8 @@ public static class StorageTools
         }
     }
 
-    [McpServerTool, Description("Mounts an existing folder OR supported archive file as a browsable drive with a custom protocol scheme. The mounted item will appear in GetAvailableDrives() and can be browsed like any other drive.")]
-    public static async Task<object> MountFolder(
+    [Description("Mounts an existing folder OR supported archive file as a browsable drive with a custom protocol scheme. The mounted item will appear in GetAvailableDrives() and can be browsed like any other drive.")]
+    public static async Task<MountResult> MountFolder(
         [Description("The ID or path of the folder or archive file to mount")] string folderId,
         [Description("The custom protocol scheme to use (e.g., 'myproject', 'backup', 'archive')")] string protocolScheme,
         [Description("Display name for the mounted item")] string mountName)
@@ -1283,15 +1270,14 @@ public static class StorageTools
                 await mountSettings.SaveAsync();
             }
 
-            return new
-            {
-                success = true,
-                rootUri,
-                protocolScheme,
-                mountName,
-                originalId = folderId,
-                message = $"Successfully mounted '{mountName}' as {protocolScheme}://"
-            };
+            return new MountResult(
+                Success: true,
+                RootUri: rootUri,
+                ProtocolScheme: protocolScheme,
+                MountName: mountName,
+                OriginalId: folderId,
+                Message: $"Successfully mounted '{mountName}' as {protocolScheme}://"
+            );
         }
         catch (McpException) { throw; }
         catch (ArgumentException ex)
@@ -1304,8 +1290,8 @@ public static class StorageTools
         }
     }
 
-    [McpServerTool, Description("Unmounts a previously mounted folder, removing it from available drives.")]
-    public static async Task<object> UnmountFolder(
+    [Description("Unmounts a previously mounted folder, removing it from available drives.")]
+    public static async Task<UnmountResult> UnmountFolder(
         [Description("The protocol scheme of the mounted folder to unmount")] string protocolScheme)
     {
         try
@@ -1328,21 +1314,19 @@ public static class StorageTools
                     await mountSettings.SaveAsync();
                 }
                 
-                return new
-                {
-                    success = true,
-                    protocolScheme = protocolScheme,
-                    message = $"Successfully unmounted {protocolScheme}://"
-                };
+                return new UnmountResult(
+                    Success: true,
+                    ProtocolScheme: protocolScheme,
+                    Message: $"Successfully unmounted {protocolScheme}://"
+                );
             }
             else
             {
-                return new
-                {
-                    success = false,
-                    protocolScheme = protocolScheme,
-                    message = $"Protocol scheme '{protocolScheme}' not found or is not a mounted folder"
-                };
+                return new UnmountResult(
+                    Success: false,
+                    ProtocolScheme: protocolScheme,
+                    Message: $"Protocol scheme '{protocolScheme}' not found or is not a mounted folder"
+                );
             }
         }
         catch (McpException)
@@ -1355,8 +1339,8 @@ public static class StorageTools
         }
     }
 
-    [McpServerTool, Description("Lists all currently mounted folders and their information.")]
-    public static async Task<object[]> GetMountedFolders()
+    [Description("Lists all currently mounted folders and their information.")]
+    public static async Task<MountedFolderInfo[]> GetMountedFolders()
     {
         try
         {
@@ -1372,8 +1356,8 @@ public static class StorageTools
         }
     }
 
-    [McpServerTool, Description("Renames a mounted folder's protocol scheme and/or display name. Preserves all existing references and dependencies.")]
-    public static async Task<object> RenameMountedFolder(
+    [Description("Renames a mounted folder's protocol scheme and/or display name. Preserves all existing references and dependencies.")]
+    public static async Task<RenameMountResult> RenameMountedFolder(
         [Description("The current protocol scheme to rename")] string currentProtocolScheme,
         [Description("The new protocol scheme (optional, leave empty to keep current)")] string? newProtocolScheme = null,
         [Description("The new display name (optional, leave empty to keep current)")] string? newMountName = null)
@@ -1402,15 +1386,14 @@ public static class StorageTools
                 await mountSettings.SaveAsync();
             }
             
-            return new
-            {
-                success = true,
-                oldProtocolScheme = currentProtocolScheme,
-                newProtocolScheme = newProtocolScheme ?? currentProtocolScheme,
-                newMountName = newMountName,
-                newRootUri = newRootUri,
-                message = $"Successfully renamed mount to {newRootUri}"
-            };
+            return new RenameMountResult(
+                Success: true,
+                OldProtocolScheme: currentProtocolScheme,
+                NewProtocolScheme: newProtocolScheme ?? currentProtocolScheme,
+                NewMountName: newMountName,
+                NewRootUri: newRootUri,
+                Message: $"Successfully renamed mount to {newRootUri}"
+            );
         }
         catch (McpException)
         {

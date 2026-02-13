@@ -11,6 +11,8 @@ using System.Text;
 using System.Collections.Concurrent;
 using ModelContextProtocol.Protocol;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
+using System.Reflection;
 using OwlCore.Diagnostics;
 using OwlCore.Kubo;
 using Ipfs.Http;
@@ -51,10 +53,44 @@ builder.Logging.AddConsole(consoleLogOptions =>
     consoleLogOptions.LogToStandardErrorThreshold = Microsoft.Extensions.Logging.LogLevel.Trace;
 });
 
+// Clone the MCP SDK's own default JsonSerializerOptions and inject our source-gen context.
+// This ensures the SDK's built-in resolvers (McpJsonUtilities, AIJsonUtilities) remain present
+// while also making our custom record types (DriveInfoResult, etc.) serializable.
+var jsonOptions = new System.Text.Json.JsonSerializerOptions(McpJsonUtilities.DefaultOptions);
+jsonOptions.TypeInfoResolverChain.Add(MountSerializerContext.Default);
+
+// Register tools programmatically — no [McpServerTool] or [McpServerToolType] attributes needed.
+// McpServerTool.Create(MethodInfo, options) handles static methods; trimmer preserves them via DynamicDependency.
+var toolOptions = new McpServerToolCreateOptions { SerializerOptions = jsonOptions };
+var tools = new List<McpServerTool>();
+RegisterToolsFrom(typeof(StorageTools), toolOptions, tools);
+RegisterToolsFrom(typeof(StorageWriteTools), toolOptions, tools);
+RegisterToolsFrom(typeof(TimeTool), toolOptions, tools);
+RegisterToolsFrom(typeof(FileLauncherTool), toolOptions, tools);
+RegisterToolsFrom(typeof(IpfsGetCidTool), toolOptions, tools);
+
 builder.Services
     .AddMcpServer()
     .WithStdioServerTransport()
-    .WithToolsFromAssembly();
+    .WithTools(tools);
+
+// Uses the 2-param Create(MethodInfo, McpServerToolCreateOptions) overload for static methods.
+[System.Diagnostics.CodeAnalysis.DynamicDependency(System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicMethods, typeof(StorageTools))]
+[System.Diagnostics.CodeAnalysis.DynamicDependency(System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicMethods, typeof(StorageWriteTools))]
+[System.Diagnostics.CodeAnalysis.DynamicDependency(System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicMethods, typeof(TimeTool))]
+[System.Diagnostics.CodeAnalysis.DynamicDependency(System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicMethods, typeof(FileLauncherTool))]
+[System.Diagnostics.CodeAnalysis.DynamicDependency(System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicMethods, typeof(IpfsGetCidTool))]
+static void RegisterToolsFrom(
+    [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicMethods)] Type toolType,
+    McpServerToolCreateOptions options,
+    List<McpServerTool> tools)
+{
+    foreach (var method in toolType.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.DeclaredOnly))
+    {
+        if (method.IsSpecialName) continue;
+        tools.Add(McpServerTool.Create(method, (object?)null, options));
+    }
+}
 
 // Logging
 var logFile = await mcpWorkingFolder.CreateFileAsync($"OwlCore.Storage.Mcp.{startTime.Ticks}.log", overwrite: false, cancellationToken);
@@ -130,41 +166,41 @@ await builder.Build().RunAsync(cancellationToken);
 // [McpServerToolType]
 public static class EchoTool
 {
-    [McpServerTool, Description("Echoes the message back to the client.")]
+    [Description("Echoes the message back to the client.")]
     public static string Echo(string message) => $"hello {message}";
 }
 
-[McpServerToolType]
 public static class TimeTool
 {
-    [McpServerTool, Description("Gets the current date and time.")]
+    [Description("Gets the current date and time.")]
     public static string GetCurrentTime() => DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
 }
 
 // [McpServerToolType]
 public static class UuidTool
 {
-    [McpServerTool, Description("Generates a new UUID.")]
+    [Description("Generates a new UUID.")]
     public static string GenerateUuid() => Guid.NewGuid().ToString();
 }
 
 // [McpServerToolType]
 public static class CalculatorTool
 {
-    [McpServerTool, Description("Adds two numbers together.")]
+    [Description("Adds two numbers together.")]
     public static double Add(double a, double b) => a + b;
 
-    [McpServerTool, Description("Subtracts the second number from the first.")]
+    [Description("Subtracts the second number from the first.")]
     public static double Subtract(double a, double b) => a - b;
 
-    [McpServerTool, Description("Multiplies two numbers.")]
+    [Description("Multiplies two numbers.")]
     public static double Multiply(double a, double b) => a * b;
 
-    [McpServerTool, Description("Divides the first number by the second.")]
+    [Description("Divides the first number by the second.")]
     public static double Divide(double a, double b) => b != 0 ? a / b : throw new ArgumentException("Division by zero is not allowed");
 }
 
 /// <summary>
+
 /// Determines how start_file launches the target.
 /// </summary>
 public enum StartMode
@@ -181,11 +217,10 @@ public enum StartMode
     LaunchGraphicalApplication,
 }
 
-[McpServerToolType]
 public static class FileLauncherTool
 {
-    [McpServerTool, Description($"Process.Start a specific {nameof(fileId)} using either {nameof(StartMode)}.{nameof(StartMode.ExecuteShellBinary)} to run/execute a shell binary/command with captured stdio (returns exitCode/stdout/stderr) or {nameof(StartMode)}.{nameof(StartMode.LaunchGraphicalApplication)} to open a document/media file in the default GUI app.")]
-    public static async Task<object> Start(
+    [Description($"Process.Start a specific {nameof(fileId)} using either {nameof(StartMode)}.{nameof(StartMode.ExecuteShellBinary)} to run/execute a shell binary/command with captured stdio (returns exitCode/stdout/stderr) or {nameof(StartMode)}.{nameof(StartMode.LaunchGraphicalApplication)} to open a document/media file in the default GUI app.")]
+    public static async Task<StartResult> Start(
         [Description($"Informs how to Process.Start the given {nameof(fileId)}: either {nameof(StartMode)}.{nameof(StartMode.ExecuteShellBinary)} to execute a binary with given stdin with captured stdio returning exitCode/stdout/stderr or {nameof(StartMode)}.{nameof(StartMode.LaunchGraphicalApplication)} to open a document/media/app in the default GUI handler.")] StartMode fileIdStartMode,
         [Description($"The ID of the binary file to {nameof(StartMode)}.{nameof(StartMode.ExecuteShellBinary)} or {nameof(StartMode)}.{nameof(StartMode.LaunchGraphicalApplication)} per {nameof(fileIdStartMode)}. This MUST be a file (never folder). This MUST NOT contain any {nameof(processArguments)}. File is copied to local storage if non-local file is given.")] string fileId,
         [Description("The process arguments and parameters to pass to the started file.")] string processArguments = "",
@@ -317,12 +352,11 @@ public static class FileLauncherTool
                 if (shellProcess == null)
                     throw new McpException($"Failed to open: '{fileId}'", McpErrorCode.InternalError);
 
-                return new
-                {
-                    started = true,
-                    mode = fileIdStartMode.ToString(),
-                    message = $"Opened '{fileId}' with default application."
-                };
+                return new StartResult(
+                    Mode: fileIdStartMode.ToString(),
+                    Started: true,
+                    Message: $"Opened '{fileId}' with default application."
+                );
             }
 
             // ExecuteShellBinary: ensure file is executable, then run with captured stdio
@@ -378,23 +412,23 @@ public static class FileLauncherTool
             if (!exited)
             {
                 try { process.Kill(entireProcessTree: true); } catch { }
-                return new
-                {
-                    exitCode = -1,
-                    stdout,
-                    stderr,
-                    timedOut = true,
-                    error = $"Process timed out after {processStartTimeoutMs}ms and was killed."
-                };
+                return new StartResult(
+                    Mode: fileIdStartMode.ToString(),
+                    ExitCode: -1,
+                    Stdout: stdout,
+                    Stderr: stderr,
+                    TimedOut: true,
+                    Error: $"Process timed out after {processStartTimeoutMs}ms and was killed."
+                );
             }
 
-            return new
-            {
-                exitCode = process.ExitCode,
-                stdout,
-                stderr = string.IsNullOrEmpty(stderr) ? null : stderr,
-                timedOut = false,
-            };
+            return new StartResult(
+                Mode: fileIdStartMode.ToString(),
+                ExitCode: process.ExitCode,
+                Stdout: stdout,
+                Stderr: string.IsNullOrEmpty(stderr) ? null : stderr,
+                TimedOut: false
+            );
         }
         catch (McpException)
         {
@@ -407,10 +441,9 @@ public static class FileLauncherTool
     }
 }
 
-[McpServerToolType]
 public static class IpfsGetCidTool
 {
-    [McpServerTool, Description("Gets the Content Identifier (CID) for a file or folder. If the item isn't already addressable in IPFS, it will be added using provided options.")]
+    [Description("Gets the Content Identifier (CID) for a file or folder. If the item isn't already addressable in IPFS, it will be added using provided options.")]
     public static async Task<string> GetCidAsync(string fileId, bool? allowAdd = null, bool? pin = null, bool? onlyHash = null, int? cidVersion = null, bool? noCopy = null, bool? fsCache = null)
     {
         try

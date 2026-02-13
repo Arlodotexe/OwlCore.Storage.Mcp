@@ -47,19 +47,18 @@ public class MountedFolderProtocolHandler : IProtocolHandler
         return $"{parentId}/{itemName}";
     }
 
-    public Task<object?> GetDriveInfoAsync(string rootUri, CancellationToken cancellationToken = default)
+    public Task<DriveInfoResult?> GetDriveInfoAsync(string rootUri, CancellationToken cancellationToken = default)
     {
         // Return drive information for the mounted folder
-        return Task.FromResult<object?>(new
-        {
-            id = rootUri,
-            name = $"Mounted: {_mountName}",
-            type = "mounted-folder",
-            driveType = "NetworkDrive",
-            isReady = true,
-            totalSize = -1L, // Unknown for arbitrary folders
-            availableFreeSpace = -1L // Unknown for arbitrary folders
-        });
+        return Task.FromResult<DriveInfoResult?>(new DriveInfoResult(
+            Id: rootUri,
+            Name: $"Mounted: {_mountName}",
+            Type: "mounted-folder",
+            DriveType: "NetworkDrive",
+            IsReady: true,
+            TotalSize: -1L,
+            AvailableFreeSpace: -1L
+        ));
     }
 
     public bool NeedsRegistration(string id)

@@ -552,9 +552,9 @@ public static class ProtocolRegistry
     /// Gets information about all mounted folders
     /// </summary>
     /// <returns>Array of mounted folder information</returns>
-    public static object[] GetMountedFolders()
+    public static MountedFolderInfo[] GetMountedFolders()
     {
-        var results = new List<object>();
+        var results = new List<MountedFolderInfo>();
         foreach (var h in _mountedFolders.Values)
         {
             try
@@ -586,29 +586,27 @@ public static class ProtocolRegistry
                         }
                     }
                 }
-                results.Add(new
-                {
-                    protocolScheme = h.ProtocolScheme,
-                    mountName = h.MountName,
-                    rootUri = $"{h.ProtocolScheme}://",
-                    folderType = h.MountedFolder.GetType().Name,
-                    mountType,
-                    originalId
-                });
+                results.Add(new MountedFolderInfo(
+                    ProtocolScheme: h.ProtocolScheme,
+                    MountName: h.MountName,
+                    RootUri: $"{h.ProtocolScheme}://",
+                    FolderType: h.MountedFolder.GetType().Name,
+                    MountType: mountType.ToString(),
+                    OriginalId: originalId
+                ));
             }
             catch (Exception ex)
             {
                 Logger.LogInformation($"Failed to get info for mounted folder '{h.ProtocolScheme}': {ex.Message}");
                 // Still include the mount with basic info so it's visible
-                results.Add(new
-                {
-                    protocolScheme = h.ProtocolScheme,
-                    mountName = h.MountName,
-                    rootUri = $"{h.ProtocolScheme}://",
-                    folderType = h.MountedFolder.GetType().Name,
-                    mountType = StorableType.Folder,
-                    originalId = string.Empty
-                });
+                results.Add(new MountedFolderInfo(
+                    ProtocolScheme: h.ProtocolScheme,
+                    MountName: h.MountName,
+                    RootUri: $"{h.ProtocolScheme}://",
+                    FolderType: h.MountedFolder.GetType().Name,
+                    MountType: StorableType.Folder.ToString(),
+                    OriginalId: string.Empty
+                ));
             }
         }
         return results.ToArray();
