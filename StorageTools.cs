@@ -393,7 +393,7 @@ public static class StorageTools
     }
 
     [McpServerTool, Description($"Lists all items in a folder by ID or path. Returns array of items with their IDs, names, and types. Use ${nameof(GetFolderFiles)} or {nameof(GetFolderSubfolders)} to filter by type. Prefer {nameof(GetItemByRelativePath)} for hierarchical or path-based navigation.")]
-    public static async Task<object> GetFolderItems(string folderId, [Description("Maximum number of results to return. Default 100.")] int maxResults = 100, [Description("Number of items to skip for pagination. Default 0.")] int skip = 0)
+    public static async Task<object> GetFolderItems(string folderId, [Description("Maximum number of results to return. Default 50.")] int maxResults = 50, [Description("Number of items to skip for pagination. Default 0.")] int skip = 0)
     {
         var cancellationToken = CancellationToken.None;
 
@@ -443,7 +443,7 @@ public static class StorageTools
     }
 
     [McpServerTool, Description("Lists only files in a folder by ID or path. Returns array of file items.")]
-    public static async Task<object> GetFolderFiles(string folderId, [Description("Maximum number of results to return. Default 100.")] int maxResults = 100, [Description("Number of items to skip for pagination. Default 0.")] int skip = 0)
+    public static async Task<object> GetFolderFiles(string folderId, [Description("Maximum number of results to return. Default 50.")] int maxResults = 50, [Description("Number of items to skip for pagination. Default 0.")] int skip = 0)
     {
         var cancellationToken = CancellationToken.None;
         try
@@ -501,7 +501,7 @@ public static class StorageTools
     }
 
     [McpServerTool, Description("Lists only folders in a folder by ID or path. Returns array of folder items.")]
-    public static async Task<object> GetFolderSubfolders(string folderId, [Description("Maximum number of results to return. Default 100.")] int maxResults = 100, [Description("Number of items to skip for pagination. Default 0.")] int skip = 0)
+    public static async Task<object> GetFolderSubfolders(string folderId, [Description("Maximum number of results to return. Default 50.")] int maxResults = 50, [Description("Number of items to skip for pagination. Default 0.")] int skip = 0)
     {
         var cancellationToken = CancellationToken.None;
         try
