@@ -162,18 +162,36 @@ public static class CalculatorTool
     public static double Divide(double a, double b) => b != 0 ? a / b : throw new ArgumentException("Division by zero is not allowed");
 }
 
+/// <summary>
+/// Determines how start_file launches the target.
+/// </summary>
+public enum StartMode
+{
+    /// <summary>
+    /// Execute a binary/script with captured stdio. The fileId must point to an executable file (not a folder).
+    /// Returns { exitCode, stdout, stderr, timedOut }.
+    /// </summary>
+    ExecuteShellBinary,
+
+    /// <summary>
+    /// Open a file (document, image, audio, video, etc.) in the default GUI application. Fire-and-forget, no stdio capture.
+    /// </summary>
+    LaunchGraphicalApplication,
+}
+
 [McpServerToolType]
 public static class FileLauncherTool
 {
-    [McpServerTool, Description("Opens a file: processes, documents, images, audio, video, in the default OS program. Handles any file or process the local OS can handle, even non-local storage IDs, which are copied locally first. Returns { exitCode, stdout, stderr, timedOut }. Set timeoutMs=0 for fire-and-forget (GUI apps, media).")]
-    public static async Task<object> StartFile(
-        [Description("Storage ID of the file to start. Auto-copied to local storage if non-local.")] string fileId,
-        [Description("Shell verb for GUI applications. Not used for shell execute, only used for GUI file launch.")] string verb = "open",
-        [Description("Process arguments to pass to the started file.")] string cliArguments = "",
-        [Description("Working directory for shell execution to start in.")] string? workingDirectory = null,
-        [Description("Text to write to stdin.")] string? stdin = null,
-        [Description("Timeout in ms. Default 30000. Set to 0 for fire-and-forget.")] int timeoutMs = 30000,
-        [Description("Whether to overwrite any existing local copy of the started non-local file. Default false.")] bool overwrite = false)
+    [McpServerTool, Description($"Process.Start a specific {nameof(fileId)} using either {nameof(StartMode)}.{nameof(StartMode.ExecuteShellBinary)} to execute a binary with captured stdio (returns exitCode/stdout/stderr) or {nameof(StartMode)}.{nameof(StartMode.LaunchGraphicalApplication)} to open a document/media file in the default GUI app.")]
+    public static async Task<object> Start(
+        [Description($"Informs how to Process.Start the given {nameof(fileId)}: either {nameof(StartMode)}.{nameof(StartMode.ExecuteShellBinary)} to execute a binary with given stdin with captured stdio returning exitCode/stdout/stderr or {nameof(StartMode)}.{nameof(StartMode.LaunchGraphicalApplication)} to open a document/media/app in the default GUI handler.")] StartMode fileIdStartMode,
+        [Description($"The ID of the binary file to {nameof(StartMode)}.{nameof(StartMode.ExecuteShellBinary)} or {nameof(StartMode)}.{nameof(StartMode.LaunchGraphicalApplication)} per {nameof(fileIdStartMode)}. This MUST be a file (never folder). This MUST NOT contain any {nameof(processArguments)}. File is copied to local storage if non-local file is given.")] string fileId,
+        [Description("The process arguments and parameters to pass to the started file.")] string processArguments = "",
+        [Description("Working directory for the process to start in.")] string? processWorkingDirectory = null,
+        [Description($"Text to write to stdin. Only used with {nameof(StartMode)}.{nameof(StartMode.ExecuteShellBinary)}.")] string? processStdin = null,
+        [Description($"Timeout in ms for {nameof(StartMode)}.{nameof(StartMode.ExecuteShellBinary)}. Default 30000. Ignored for {nameof(StartMode)}.{nameof(StartMode.LaunchGraphicalApplication)}.")] int processStartTimeoutMs = 30000,
+        [Description($"Shell verb for {nameof(StartMode)}.{nameof(StartMode.LaunchGraphicalApplication)} (e.g. 'open'). Ignored for {nameof(StartMode)}.{nameof(StartMode.ExecuteShellBinary)}.")] string? processStartVerb = null,
+        [Description("Whether to overwrite the local copy of a started non-local file. Default false.")] bool overwrite = false)
     {
         try
         {
@@ -187,23 +205,63 @@ public static class FileLauncherTool
                     $"Bare command names are not supported.",
                     McpErrorCode.InvalidParams);
 
-            // Resolve working directory — must be a local filesystem directory
-            if (workingDirectory != null && workingDirectory.Contains("://"))
+            // ExecuteShellBinary: fileId MUST be an executable binary, not a document/data file.
+            // The model often confuses this — it passes a document as fileId and puts the real command in cliArguments.
+            if (fileIdStartMode == StartMode.ExecuteShellBinary)
             {
-                var resolvedWd = ProtocolRegistry.ResolveAliasToFullId(workingDirectory);
+                var fileExtLower = Path.GetExtension(fileId).ToLowerInvariant();
+                // Known non-executable extensions → the model is confused about what fileId means
+                var nonExecutableExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ".md", ".txt", ".json", ".xml", ".yaml", ".yml", ".toml", ".csv", ".tsv",
+                    ".html", ".htm", ".css", ".js", ".ts", ".jsx", ".tsx",
+                    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".svg", ".webp", ".ico",
+                    ".mp3", ".wav", ".flac", ".ogg", ".aac", ".m4a",
+                    ".mp4", ".mkv", ".avi", ".mov", ".webm",
+                    ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+                    ".zip", ".tar", ".gz", ".bz2", ".xz", ".7z", ".rar",
+                    ".cs", ".py", ".rb", ".java", ".go", ".rs", ".c", ".cpp", ".h", ".hpp",
+                    ".log", ".ini", ".cfg", ".conf", ".env",
+                };
+
+                if (nonExecutableExtensions.Contains(fileExtLower))
+                    throw new McpException(
+                        $"WRONG USAGE: '{fileId}' is a {fileExtLower} file, not an executable binary. " +
+                        $"In {nameof(StartMode.ExecuteShellBinary)} mode, fileId must be the EXECUTABLE BINARY to run (e.g., '/usr/bin/git'), " +
+                        $"and cliArguments are the arguments TO that binary. " +
+                        $"To open '{fileId}' in a GUI app, use mode={nameof(StartMode.LaunchGraphicalApplication)} instead. " +
+                        $"Example: to run 'git add .', set fileId='/usr/bin/git' and cliArguments='add .'.",
+                        McpErrorCode.InvalidParams);
+            }
+
+            // Resolve working directory — must be a local filesystem directory
+            if (processWorkingDirectory != null && processWorkingDirectory.Contains("://"))
+            {
+                var resolvedWd = ProtocolRegistry.ResolveAliasToFullId(processWorkingDirectory);
                 if (Directory.Exists(resolvedWd))
-                    workingDirectory = resolvedWd;
+                    processWorkingDirectory = resolvedWd;
                 else
                     throw new McpException(
-                        $"Working directory '{workingDirectory}' resolved to '{resolvedWd}' which is not a local filesystem directory.",
+                        $"Working directory '{processWorkingDirectory}' resolved to '{resolvedWd}' which is not a local filesystem directory.",
                         McpErrorCode.InvalidParams);
             }
 
             // Resolve protocol aliases in arguments (e.g., "quadra://home/source/" -> "/media/arlog/Quadra/home/source/")
-            cliArguments = ProtocolRegistry.ResolveAliasesInText(cliArguments ?? "");
+            processArguments = ProtocolRegistry.ResolveAliasesInText(processArguments ?? "");
 
             // Resolve the file ID to a local filesystem ID
             var resolvedId = ProtocolRegistry.ResolveAliasToFullId(fileId);
+
+            // Reject folders — fileIdToStart must be a file, never a folder
+            if (Directory.Exists(resolvedId)
+                || (StorageTools._storableRegistry.TryGetValue(fileId, out var earlyStorable) && earlyStorable is IFolder)
+                || (StorageTools._storableRegistry.TryGetValue(resolvedId, out earlyStorable) && earlyStorable is IFolder))
+                throw new McpException(
+                    $"'{fileId}' is a folder, not a file. The {nameof(fileId)} parameter must point to a FILE. " +
+                    $"To execute a command in this directory, set {nameof(fileId)} to the binary (e.g., '/usr/bin/git') " +
+                    $"and {nameof(processWorkingDirectory)} to '{fileId}'.",
+                    McpErrorCode.InvalidParams);
+
             string localId;
 
             if (File.Exists(resolvedId))
@@ -241,53 +299,45 @@ public static class FileLauncherTool
                 localId = Path.Combine(downloadFolder.Path, localFileName);
             }
 
-            // Detect whether the file is executable: no extension or .exe → executable, everything else → file.
-            var fileExt = Path.GetExtension(localId).ToLowerInvariant();
-            var isExecutable = fileExt is ".exe" or "";
-
-            // For non-local downloaded files, only set execute permissions on actual executables
-            if (isExecutable && !File.Exists(resolvedId) && !OperatingSystem.IsWindows())
-                ProcessHelpers.EnableExecutablePermissions(localId);
-
-            // Non-executable files or fire-and-forget mode: open with shell, no stdio capture
-            if (!isExecutable || timeoutMs == 0)
+            // LaunchGraphicalApplication: open with default GUI handler, fire-and-forget
+            if (fileIdStartMode == StartMode.LaunchGraphicalApplication)
             {
                 var shellPsi = new ProcessStartInfo
                 {
                     FileName = localId,
                     UseShellExecute = true,
                     CreateNoWindow = true,
-                    Verb = verb ?? "open",
-                    Arguments = cliArguments ?? "",
+                    Verb = processStartVerb ?? "open",
+                    Arguments = processArguments ?? "",
                 };
 
                 var shellProcess = Process.Start(shellPsi);
                 if (shellProcess == null)
-                    throw new McpException($"Failed to start: '{fileId}'", McpErrorCode.InternalError);
+                    throw new McpException($"Failed to open: '{fileId}'", McpErrorCode.InternalError);
 
                 return new
                 {
                     started = true,
-                    openedAs = isExecutable ? "process" : "file",
-                    message = isExecutable
-                        ? (localId != resolvedId || resolvedId != fileId
-                            ? $"Started: '{fileId}' (local: '{localId}' in working directory '{workingDirectory ?? Path.GetDirectoryName(localId) ?? ThrowHelper.ThrowArgumentException<string>("Unable to determine working directory")}')"
-                            : $"Started: '{fileId}' in working directory '{workingDirectory ?? Path.GetDirectoryName(localId) ?? ThrowHelper.ThrowArgumentException<string>("Unable to determine working directory")}')")
-                        : $"Opened '{fileId}' with default application."
+                    mode = fileIdStartMode.ToString(),
+                    message = $"Opened '{fileId}' with default application."
                 };
             }
+
+            // ExecuteShellBinary: ensure file is executable, then run with captured stdio
+            if (!OperatingSystem.IsWindows())
+                ProcessHelpers.EnableExecutablePermissions(localId);
 
             // Captured mode: redirect stdio, wait for exit
             var psi = new ProcessStartInfo
             {
                 FileName = localId,
-                Arguments = cliArguments ?? "",
+                Arguments = processArguments ?? "",
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
-                RedirectStandardInput = stdin != null,
+                RedirectStandardInput = processStdin != null,
                 CreateNoWindow = true,
-                WorkingDirectory = workingDirectory
+                WorkingDirectory = processWorkingDirectory
                     ?? Path.GetDirectoryName(localId)
                     ?? Path.GetTempPath(),
             };
@@ -296,16 +346,16 @@ public static class FileLauncherTool
             if (process == null)
                 throw new McpException($"Failed to start process: '{fileId}'", McpErrorCode.InternalError);
 
-            if (stdin != null)
+            if (processStdin != null)
             {
-                await process.StandardInput.WriteAsync(stdin);
+                await process.StandardInput.WriteAsync(processStdin);
                 process.StandardInput.Close();
             }
 
             var stdoutTask = process.StandardOutput.ReadToEndAsync();
             var stderrTask = process.StandardError.ReadToEndAsync();
 
-            var exited = process.WaitForExit(timeoutMs);
+            var exited = process.WaitForExit(processStartTimeoutMs);
 
             var stdout = await stdoutTask;
             var stderr = await stderrTask;
@@ -319,7 +369,7 @@ public static class FileLauncherTool
                     stdout,
                     stderr,
                     timedOut = true,
-                    error = $"Process timed out after {timeoutMs}ms and was killed."
+                    error = $"Process timed out after {processStartTimeoutMs}ms and was killed."
                 };
             }
 
