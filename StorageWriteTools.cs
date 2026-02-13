@@ -23,6 +23,12 @@ public static partial class StorageWriteTools
         var cancellationToken = CancellationToken.None;
         try
         {
+            if (folderName.Contains('/') || folderName.Contains('\\'))
+                throw new McpException(
+                    $"Folder name '{folderName}' contains path separators. " +
+                    $"Use create_relative_folder_path(startingItemId: '{parentFolderId}', relativePath: '{folderName}') to create nested folders.",
+                    McpErrorCode.InvalidParams);
+
             await StorageTools.EnsureStorableRegistered(parentFolderId, cancellationToken);
 
             if (!_storableRegistry.TryGetValue(parentFolderId, out var storable) || storable is not IModifiableFolder modifiableFolder)
@@ -55,6 +61,12 @@ public static partial class StorageWriteTools
         var cancellationToken = CancellationToken.None;
         try
         {
+            if (fileName.Contains('/') || fileName.Contains('\\'))
+                throw new McpException(
+                    $"File name '{fileName}' contains path separators. " +
+                    $"Use create_relative_folder_path to create parent directories first, then create the file in the leaf folder.",
+                    McpErrorCode.InvalidParams);
+
             await StorageTools.EnsureStorableRegistered(parentFolderId, cancellationToken);
 
             if (!_storableRegistry.TryGetValue(parentFolderId, out var storable) || storable is not IModifiableFolder modifiableFolder)
