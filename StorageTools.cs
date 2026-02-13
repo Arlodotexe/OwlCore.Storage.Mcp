@@ -998,16 +998,37 @@ public static class StorageTools
             if (!_storableRegistry.TryGetValue(id, out var storable))
                 throw new McpException($"Item with ID '{id}' not found", McpErrorCode.InvalidParams);
 
+            var typeStr = storable switch
+            {
+                IFile => "file",
+                IFolder => "folder",
+                _ => "unknown"
+            };
+
+            // For files, try to get size and line count
+            long? sizeBytes = null;
+            int? lineCount = null;
+            if (storable is IFile file)
+            {
+                try
+                {
+                    var content = await file.ReadTextAsync(CancellationToken.None);
+                    sizeBytes = Encoding.UTF8.GetByteCount(content);
+                    lineCount = content.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None).Length;
+                }
+                catch
+                {
+                    // Not a text file or unreadable — leave null
+                }
+            }
+
             return new
             {
                 id = storable.Id,
                 name = storable.Name,
-                type = storable switch
-                {
-                    IFile => "file",
-                    IFolder => "folder",
-                    _ => "unknown"
-                }
+                type = typeStr,
+                sizeBytes,
+                lineCount,
             };
         }
         catch (McpException)
