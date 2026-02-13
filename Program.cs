@@ -164,7 +164,7 @@ public static class CalculatorTool
 [McpServerToolType]
 public static class FileLauncherTool
 {
-    [McpServerTool, Description("Opens a file in the operating system's default application (e.g., opens a .pdf in a PDF viewer, a .png in an image viewer). This does NOT read or return file contents — use read_file_as_text or read_file_text_range to read file contents instead.")]
+    [McpServerTool, Description("Runs an executable or opens a file. Executes CLI tools (e.g., pwsh, git, python) and returns { exitCode, stdout, stderr, timedOut }. Also opens files in GUI apps when timeoutMs=0. Supports stdin, working directory, and timeout. Does NOT read file contents — use read_file_as_text or read_file_text_range for that.")]
     public static async Task<object> StartFile(
         [Description("Path to the file or executable to start.")] string filePath,
         string verb = "open",
