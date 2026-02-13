@@ -164,36 +164,89 @@ public static class CalculatorTool
 [McpServerToolType]
 public static class FileLauncherTool
 {
-    [McpServerTool, Description("Executes a program and returns { exitCode, stdout, stderr, timedOut }. Use this for terminal/shell commands. Set timeoutMs=0 for GUI apps (fire-and-forget).")]
+    [McpServerTool, Description("Executes a program or opens a file. Accepts any storage ID — non-local files are copied locally first. Returns { exitCode, stdout, stderr, timedOut }. Set timeoutMs=0 for fire-and-forget (GUI apps, media).")]
     public static async Task<object> StartFile(
-        [Description("Full filesystem path of the executable (e.g., '/usr/bin/pwsh', '/usr/bin/git').")] string filePath,
-        string verb = "open",
+        [Description("Storage ID of the file to start.")] string fileId,
+        [Description("Shell verb for fire-and-forget mode (timeoutMs=0). Ignored in captured mode.")] string verb = "open",
         [Description("Arguments to pass to the process.")] string arguments = "",
-        [Description("Working directory for the process. Defaults to the file's directory.")] string? workingDirectory = null,
-        [Description("Text to write to the process's standard input (stdin). Null to not send any input.")] string? stdin = null,
-        [Description("Maximum time in milliseconds to wait for the process to exit. Default 30000 (30s). Set to 0 to not wait (fire-and-forget for GUI apps).")] int timeoutMs = 30000)
+        [Description("Working directory for the process.")] string? workingDirectory = null,
+        [Description("Text to write to stdin.")] string? stdin = null,
+        [Description("Timeout in ms. Default 30000. Set to 0 for fire-and-forget.")] int timeoutMs = 30000,
+        [Description("Whether to overwrite an existing local copy. Default false.")] bool overwrite = false)
     {
         try
         {
-            if (string.IsNullOrWhiteSpace(filePath))
-                throw new McpException("File path cannot be empty", McpErrorCode.InvalidParams);
+            if (string.IsNullOrWhiteSpace(fileId))
+                throw new McpException("File ID cannot be empty", McpErrorCode.InvalidParams);
 
-            var resolvedPath = ProtocolRegistry.ResolveAliasToFullId(filePath);
+            // Reject bare command names — must be a storage ID
+            if (!fileId.Contains('/') && !fileId.Contains('\\') && !fileId.Contains("://"))
+                throw new McpException(
+                    $"'{fileId}' is not a valid storage ID. Provide the full filesystem ID (e.g., '/usr/bin/{fileId}') or a protocol ID (e.g., 'mfs://{fileId}'). " +
+                    $"Bare command names are not supported.",
+                    McpErrorCode.InvalidParams);
+
+            // Resolve working directory — must be a local filesystem directory
+            if (workingDirectory != null && workingDirectory.Contains("://"))
+            {
+                var resolvedWd = ProtocolRegistry.ResolveAliasToFullId(workingDirectory);
+                if (Directory.Exists(resolvedWd))
+                    workingDirectory = resolvedWd;
+                else
+                    throw new McpException(
+                        $"Working directory '{workingDirectory}' resolved to '{resolvedWd}' which is not a local filesystem directory.",
+                        McpErrorCode.InvalidParams);
+            }
+
+            // Resolve the file ID to a local filesystem ID
+            var resolvedId = ProtocolRegistry.ResolveAliasToFullId(fileId);
+            string localId;
+
+            if (File.Exists(resolvedId))
+            {
+                localId = resolvedId;
+            }
+            else
+            {
+                // Non-local file — copy to a deterministic local location via storage API
+                var cancellationToken = CancellationToken.None;
+                await StorageTools.EnsureStorableRegistered(fileId, cancellationToken);
+
+                IFile? storageFile = null;
+                if (StorageTools._storableRegistry.TryGetValue(fileId, out var storable) && storable is IFile f1)
+                    storageFile = f1;
+                else if (StorageTools._storableRegistry.TryGetValue(resolvedId, out storable) && storable is IFile f2)
+                    storageFile = f2;
+
+                if (storageFile == null)
+                    throw new McpException($"File not found: '{fileId}'", McpErrorCode.InvalidParams);
+
+                // Create download folder under temp: ./owlcore/storage/mcp/downloads/startfile/
+                var tempRoot = new SystemFolder(Path.GetTempPath());
+                var downloadFolder = (SystemFolder)await tempRoot.CreateFolderByRelativePathAsync(
+                    "owlcore/storage/mcp/downloads/startfile/", overwrite: false, cancellationToken);
+
+                // Deterministic file name: hash of underlying file ID + original extension
+                var idHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                    Encoding.UTF8.GetBytes(storageFile.Id)))[..16];
+                var ext = Path.GetExtension(storageFile.Name);
+                var localFileName = $"{idHash}{ext}";
+
+                await downloadFolder.CreateCopyOfAsync(storageFile, overwrite, localFileName);
+
+                localId = Path.Combine(downloadFolder.Path, localFileName);
+
+                // On Linux, ensure the file is executable
+                if (!OperatingSystem.IsWindows())
+                    ProcessHelpers.EnableExecutablePermissions(localId);
+            }
 
             // Fire-and-forget mode (timeoutMs == 0): open with shell, no stdio capture
             if (timeoutMs == 0)
             {
-                if (!File.Exists(resolvedPath))
-                {
-                    if (resolvedPath != filePath)
-                        throw new McpException($"File not found. Original path: '{filePath}', Resolved path: '{resolvedPath}'", McpErrorCode.InvalidParams);
-                    else
-                        throw new McpException($"File not found: '{filePath}'", McpErrorCode.InvalidParams);
-                }
-
                 var shellPsi = new ProcessStartInfo
                 {
-                    FileName = resolvedPath,
+                    FileName = localId,
                     UseShellExecute = true,
                     CreateNoWindow = true,
                     Verb = verb ?? "open",
@@ -202,21 +255,21 @@ public static class FileLauncherTool
 
                 var shellProcess = Process.Start(shellPsi);
                 if (shellProcess == null)
-                    throw new McpException($"Failed to start file: '{filePath}'", McpErrorCode.InternalError);
+                    throw new McpException($"Failed to start: '{fileId}'", McpErrorCode.InternalError);
 
                 return new
                 {
                     started = true,
-                    message = resolvedPath != filePath
-                        ? $"Started: '{filePath}' (resolved to: '{resolvedPath}')"
-                        : $"Started: '{filePath}'"
+                    message = localId != resolvedId || resolvedId != fileId
+                        ? $"Started: '{fileId}' (local: '{localId}')"
+                        : $"Started: '{fileId}'"
                 };
             }
 
             // Captured mode: redirect stdio, wait for exit
             var psi = new ProcessStartInfo
             {
-                FileName = resolvedPath,
+                FileName = localId,
                 Arguments = arguments ?? "",
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
@@ -224,13 +277,13 @@ public static class FileLauncherTool
                 RedirectStandardInput = stdin != null,
                 CreateNoWindow = true,
                 WorkingDirectory = workingDirectory
-                    ?? (File.Exists(resolvedPath) ? Path.GetDirectoryName(resolvedPath) : null)
+                    ?? Path.GetDirectoryName(localId)
                     ?? Path.GetTempPath(),
             };
 
             using var process = Process.Start(psi);
             if (process == null)
-                throw new McpException($"Failed to start process: '{filePath}'", McpErrorCode.InternalError);
+                throw new McpException($"Failed to start process: '{fileId}'", McpErrorCode.InternalError);
 
             if (stdin != null)
             {
@@ -273,7 +326,7 @@ public static class FileLauncherTool
         }
         catch (Exception ex)
         {
-            throw new McpException($"Failed to start file '{filePath}': {ex.Message}", ex, McpErrorCode.InternalError);
+            throw new McpException($"Failed to start file '{fileId}': {ex.Message}", ex, McpErrorCode.InternalError);
         }
     }
 }
