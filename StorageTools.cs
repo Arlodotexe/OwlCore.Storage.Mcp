@@ -302,7 +302,7 @@ public static class StorageTools
         return ProtocolRegistry.CreateCustomItemId(parentId, itemName);
     }
 
-    [Description("Gets the available browseable drives. Use these drive IDs as starting points for GetItemByRelativePath navigation.")]
+    [Description("Gets the available browseable drives, both system and mounted. Use these drive IDs as starting points for GetItemByRelativePath navigation.")]
     public static async Task<DriveInfoResult[]> GetAvailableDrives()
     {
         var driveInfos = new List<DriveInfoResult>();
@@ -984,7 +984,7 @@ public static class StorageTools
         }
     }
 
-    [Description("Gets information about a seen storable item by ID, path, or URL")]
+    [Description("Gets information about a seen storable item by its ID, including custom mount aliases.")]
     public static async Task<StorableInfoResult?> GetStorableInfo(string id)
     {
         var cancellationToken = CancellationToken.None;
@@ -1089,7 +1089,7 @@ public static class StorageTools
         }
     }
 
-    [Description("Gets a specific item by ID from a folder.")]
+    [Description("Gets a specific item by the item's ID from a folder.")]
     public static async Task<StorableItemResult> GetItemById(string folderId, string itemId)
     {
         var cancellationToken = CancellationToken.None;
@@ -1180,7 +1180,7 @@ public static class StorageTools
         }
     }
 
-    [Description("Lists all supported storage protocols and their capabilities (mfs, memory, http, ipfs, ipns).")]
+    [Description("Lists all supported storage protocols and their capabilities (mfs, memory, http, ipfs, ipns, custom, etc.).")]
     public static ProtocolInfoResult[] GetSupportedProtocols()
     {
         try
@@ -1234,7 +1234,7 @@ public static class StorageTools
         }
     }
 
-    [Description("Mounts an existing folder OR supported archive file as a browsable drive with a custom protocol scheme. The mounted item will appear in GetAvailableDrives() and can be browsed like any other drive.")]
+    [Description("Mounts an existing folder OR supported archive file as a browsable drive with a custom protocol scheme. The mounted item will appear in available drives and can be browsed like any other drive.")]
     public static async Task<MountResult> MountFolder(
         [Description("The ID or path of the folder or archive file to mount")] string folderId,
         [Description("The custom protocol scheme to use (e.g., 'myproject', 'backup', 'archive')")] string protocolScheme,
