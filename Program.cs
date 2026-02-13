@@ -17,6 +17,7 @@ using Ipfs.Http;
 using OwlCore.Extensions;
 using Ipfs;
 using Ipfs.CoreApi;
+using CommunityToolkit.Diagnostics;
 
 var startTime = DateTime.Now;
 
@@ -238,14 +239,18 @@ public static class FileLauncherTool
                 await downloadFolder.CreateCopyOfAsync(storageFile, overwrite, localFileName);
 
                 localId = Path.Combine(downloadFolder.Path, localFileName);
-
-                // On Linux, ensure the file is executable
-                if (!OperatingSystem.IsWindows())
-                    ProcessHelpers.EnableExecutablePermissions(localId);
             }
 
-            // Fire-and-forget mode (timeoutMs == 0): open with shell, no stdio capture
-            if (timeoutMs == 0)
+            // Detect whether the file is executable: no extension or .exe → executable, everything else → file.
+            var fileExt = Path.GetExtension(localId).ToLowerInvariant();
+            var isExecutable = fileExt is ".exe" or "";
+
+            // For non-local downloaded files, only set execute permissions on actual executables
+            if (isExecutable && !File.Exists(resolvedId) && !OperatingSystem.IsWindows())
+                ProcessHelpers.EnableExecutablePermissions(localId);
+
+            // Non-executable files or fire-and-forget mode: open with shell, no stdio capture
+            if (!isExecutable || timeoutMs == 0)
             {
                 var shellPsi = new ProcessStartInfo
                 {
@@ -263,9 +268,12 @@ public static class FileLauncherTool
                 return new
                 {
                     started = true,
-                    message = localId != resolvedId || resolvedId != fileId
-                        ? $"Started: '{fileId}' (local: '{localId}')"
-                        : $"Started: '{fileId}'"
+                    openedAs = isExecutable ? "process" : "file",
+                    message = isExecutable
+                        ? (localId != resolvedId || resolvedId != fileId
+                            ? $"Started: '{fileId}' (local: '{localId}' in working directory '{workingDirectory ?? Path.GetDirectoryName(localId) ?? ThrowHelper.ThrowArgumentException<string>("Unable to determine working directory")}')"
+                            : $"Started: '{fileId}' in working directory '{workingDirectory ?? Path.GetDirectoryName(localId) ?? ThrowHelper.ThrowArgumentException<string>("Unable to determine working directory")}')")
+                        : $"Opened '{fileId}' with default application."
                 };
             }
 

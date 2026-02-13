@@ -830,6 +830,36 @@ public static class ProtocolRegistry
             }
         }
 
+        // Also check built-in browsable protocol roots (e.g., mfs:// with native root ID "/")
+        foreach (var (scheme, handler) in _protocolHandlers)
+        {
+            if (handler is MountedFolderProtocolHandler)
+                continue; // Already checked above
+
+            if (!handler.HasBrowsableRoot)
+                continue;
+
+            var rootUri = $"{scheme}://";
+            if (!StorageTools._storableRegistry.TryGetValue(rootUri, out var root))
+                continue;
+
+            var rootId = root.Id;
+            if (fullId.StartsWith(rootId, StringComparison.OrdinalIgnoreCase))
+            {
+                var matchLength = rootId.Length;
+                if (matchLength > longestMatchLength)
+                {
+                    var remainingPart = fullId.Substring(matchLength);
+                    var aliasId = string.IsNullOrEmpty(remainingPart) ?
+                        rootUri :
+                        $"{scheme}://{remainingPart.TrimStart('/', '\\')}";
+
+                    bestAlias = aliasId;
+                    longestMatchLength = matchLength;
+                }
+            }
+        }
+
         // If we found a substitution, recursively check if it can be further shortened
         if (bestAlias != fullId)
         {
