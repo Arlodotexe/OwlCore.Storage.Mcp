@@ -164,12 +164,12 @@ public static class CalculatorTool
 [McpServerToolType]
 public static class FileLauncherTool
 {
-    [McpServerTool, Description("Executes a program or opens a file. Runs executables, opens documents, images, audio, video — any file the OS can handle. Accepts any storage ID — non-local files are copied locally first. Returns { exitCode, stdout, stderr, timedOut }. Set timeoutMs=0 for fire-and-forget (GUI apps, media).")]
+    [McpServerTool, Description("Opens a file: processes, documents, images, audio, video, in the default OS program. Handles any file or process the local OS can handle, even non-local storage IDs, which are copied locally first. Returns { exitCode, stdout, stderr, timedOut }. Set timeoutMs=0 for fire-and-forget (GUI apps, media).")]
     public static async Task<object> StartFile(
-        [Description("Storage ID of the file to start.")] string fileId,
-        [Description("Shell verb for fire-and-forget mode (timeoutMs=0). Ignored in captured mode.")] string verb = "open",
-        [Description("Arguments to pass to the process.")] string arguments = "",
-        [Description("Working directory for the process.")] string? workingDirectory = null,
+        [Description("Storage ID of the file to start. Auto-copied to local storage if non-local.")] string fileId,
+        [Description("Shell verb for GUI applications. Ignored when using shell execute on a process instead of launching a file with GUI.")] string verb = "open",
+        [Description("Process arguments to pass to the started file.")] string cliArguments = "",
+        [Description("Working directory for the process or file to start in.")] string? workingDirectory = null,
         [Description("Text to write to stdin.")] string? stdin = null,
         [Description("Timeout in ms. Default 30000. Set to 0 for fire-and-forget.")] int timeoutMs = 30000,
         [Description("Whether to overwrite any existing local copy of the started non-local file. Default false.")] bool overwrite = false)
@@ -197,6 +197,9 @@ public static class FileLauncherTool
                         $"Working directory '{workingDirectory}' resolved to '{resolvedWd}' which is not a local filesystem directory.",
                         McpErrorCode.InvalidParams);
             }
+
+            // Resolve protocol aliases in arguments (e.g., "quadra://home/source/" -> "/media/arlog/Quadra/home/source/")
+            cliArguments = ProtocolRegistry.ResolveAliasesInText(cliArguments ?? "");
 
             // Resolve the file ID to a local filesystem ID
             var resolvedId = ProtocolRegistry.ResolveAliasToFullId(fileId);
@@ -250,7 +253,7 @@ public static class FileLauncherTool
                     UseShellExecute = true,
                     CreateNoWindow = true,
                     Verb = verb ?? "open",
-                    Arguments = arguments ?? "",
+                    Arguments = cliArguments ?? "",
                 };
 
                 var shellProcess = Process.Start(shellPsi);
@@ -270,7 +273,7 @@ public static class FileLauncherTool
             var psi = new ProcessStartInfo
             {
                 FileName = localId,
-                Arguments = arguments ?? "",
+                Arguments = cliArguments ?? "",
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,

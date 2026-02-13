@@ -886,6 +886,50 @@ public static class ProtocolRegistry
         return currentId;
     }
 
+    /// <summary>
+    /// Resolves all protocol alias tokens (e.g., <c>quadra://home/source/</c>) found within a string,
+    /// replacing each with its resolved native ID. Useful for processing CLI arguments or other
+    /// free-text that may contain storage IDs.
+    /// </summary>
+    public static string ResolveAliasesInText(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return text;
+
+        foreach (var scheme in GetRegisteredProtocols())
+        {
+            var prefix = $"{scheme}://";
+            if (!text.Contains(prefix))
+                continue;
+
+            int searchStart = 0;
+            while (searchStart < text.Length)
+            {
+                int idx = text.IndexOf(prefix, searchStart, StringComparison.Ordinal);
+                if (idx < 0) break;
+
+                // Find the end of the token (next whitespace, quote, or end of string)
+                int end = idx + prefix.Length;
+                while (end < text.Length && !char.IsWhiteSpace(text[end]) && text[end] != '"' && text[end] != '\'')
+                    end++;
+
+                var token = text[idx..end];
+                var resolved = ResolveAliasToFullId(token);
+                if (resolved != token)
+                {
+                    text = text[..idx] + resolved + text[end..];
+                    searchStart = idx + resolved.Length;
+                }
+                else
+                {
+                    searchStart = end;
+                }
+            }
+        }
+
+        return text;
+    }
+
     private static async Task<IFolder> WrapArchiveFileAsync(IFile archiveFile, CancellationToken cancellationToken)
     {
         // Default to read-only unless we can verify parent is modifiable
