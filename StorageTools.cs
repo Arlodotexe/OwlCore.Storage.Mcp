@@ -1005,20 +1005,31 @@ public static class StorageTools
                 _ => "unknown"
             };
 
-            // For files, try to get size and line count
+            // For files, get size (always) and line count (text only)
             long? sizeBytes = null;
             int? lineCount = null;
             if (storable is IFile file)
             {
                 try
                 {
+                    using var stream = await file.OpenStreamAsync(FileAccess.Read, CancellationToken.None);
+                    sizeBytes = stream.Length;
+                }
+                catch
+                {
+                    // Stream not available or not seekable
+                }
+
+                try
+                {
                     var content = await file.ReadTextAsync(CancellationToken.None);
-                    sizeBytes = Encoding.UTF8.GetByteCount(content);
+                    if (sizeBytes == null)
+                        sizeBytes = Encoding.UTF8.GetByteCount(content);
                     lineCount = content.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None).Length;
                 }
                 catch
                 {
-                    // Not a text file or unreadable — leave null
+                    // Not a text file or unreadable — lineCount stays null
                 }
             }
 
