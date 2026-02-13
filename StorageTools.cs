@@ -897,7 +897,7 @@ public static class StorageTools
         }
     }
 
-    [McpServerTool, Description("Reads the content of a file as text with specified encoding. Works with both browseable (local storage, memory, ipfs, ipns, mfs) and non-browseable (http, https) supported protocols.")]
+    [McpServerTool, Description("Reads the entire content of a file as text. Returns the full file — no truncation. For large files, use get_storable_info first to check sizeBytes/lineCount, then use read_file_text_range to read specific line ranges instead.")]
     public static async Task<string> ReadFileAsText([Description("The ID of the file to read.")] string fileId, string encoding = "UTF-8")
     {
         var cancellationToken = CancellationToken.None;
