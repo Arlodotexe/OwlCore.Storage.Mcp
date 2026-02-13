@@ -873,9 +873,14 @@ public static class ProtocolRegistry
 
             // Reverse the alias substitution: replace "scheme://" with the folder's native ID.
             // This is the exact inverse of SubstituteWithMountAlias, which replaced the native ID
-            // prefix with "scheme://". Pure string substitution — IDs are not assumed to be paths.
+            // prefix with "scheme://". SubstituteWithMountAlias trims leading separators from the
+            // remaining part, so we must re-add one if the native ID doesn't end with a separator
+            // and there is a remaining part.
             var remaining = currentId.Substring($"{scheme}://".Length);
-            currentId = child.Id + remaining;
+            if (remaining.Length > 0 && !child.Id.EndsWith('/') && !child.Id.EndsWith('\\'))
+                currentId = child.Id + "/" + remaining;
+            else
+                currentId = child.Id + remaining;
 
             depth++;
         }
