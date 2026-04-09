@@ -398,7 +398,7 @@ public static class StorageTools
         return driveInfos.ToArray();
     }
 
-    [Description($"Lists all items in a folder by ID or path. Returns array of items with their IDs, names, and types. Use ${nameof(GetFolderFiles)} or {nameof(GetFolderSubfolders)} to filter by type. Prefer {nameof(GetItemByRelativePath)} for hierarchical or path-based navigation.")]
+    [Description($"Lists all items in a folder by ID or path. Returns array of items with their IDs, names, and types. Prefer {nameof(GetItemByRelativePath)} for hierarchical or path-based navigation.")]
     public static async Task<PaginatedItemsResult> GetFolderItems(string folderId, [Description("Maximum number of results to return. Default 50.")] int maxResults = 50, [Description("Number of items to skip for pagination. Default 0.")] int skip = 0)
     {
         var cancellationToken = CancellationToken.None;
@@ -412,7 +412,7 @@ public static class StorageTools
 
             await EnsureStorableRegistered(folderId, cancellationToken);
 
-            // Archive guidance (mirrors GetFolderFiles/GetFolderSubfolders)
+            // Archive guidance
             if (_storableRegistry.TryGetValue(folderId, out var origItem) && origItem is IFile && ProtocolRegistry.TryGetArchiveMountScheme(folderId, out var archiveScheme) && !folderId.EndsWith("://"))
                 throw new McpException($"Archive file '{folderId}' is mounted as '{archiveScheme}://'. Enumerate via '{archiveScheme}://' instead of the physical file path.", McpErrorCode.InvalidParams);
 
@@ -448,115 +448,8 @@ public static class StorageTools
         }
     }
 
-    [Description("Lists only files in a folder by ID or path. Returns array of file items.")]
-    public static async Task<PaginatedItemsResult> GetFolderFiles(string folderId, [Description("Maximum number of results to return. Default 50.")] int maxResults = 50, [Description("Number of items to skip for pagination. Default 0.")] int skip = 0)
-    {
-        var cancellationToken = CancellationToken.None;
-        try
-        {
-            // Quick validation for obviously invalid IDs
-            if (string.IsNullOrWhiteSpace(folderId))
-                throw new McpException("Folder ID cannot be empty", McpErrorCode.InvalidParams);
-
-            await EnsureStorableRegistered(folderId, cancellationToken);
-
-            // Archive guidance
-            if (_storableRegistry.TryGetValue(folderId, out var origItem2) && origItem2 is IFile && ProtocolRegistry.TryGetArchiveMountScheme(folderId, out var archiveScheme2) && !folderId.EndsWith("://"))
-                throw new McpException($"Archive file '{folderId}' is mounted as '{archiveScheme2}://'. Enumerate via '{archiveScheme2}://' instead of the physical file path.", McpErrorCode.InvalidParams);
-
-            if (!_storableRegistry.TryGetValue(folderId, out var registeredItem) || registeredItem is not IFolder folder)
-                throw new McpException($"Folder with ID '{folderId}' not found", McpErrorCode.InvalidParams);
-
-            var files = new List<StorableItemResult>();            int index = 0;
-            int collected = 0;
-            await foreach (var file in folder.GetFilesAsync())
-            {
-                string fileId = ProtocolRegistry.IsCustomProtocol(folderId) ? CreateCustomItemId(folderId, file.Name) : file.Id;
-                _storableRegistry[fileId] = file;
-
-                // Use mount alias substitution to present shorter IDs externally
-                string externalId = ProtocolRegistry.SubstituteWithMountAlias(fileId);
-                // Ensure the alias also maps to the same item for external access
-                if (externalId != fileId)
-                    _storableRegistry[externalId] = file;
-
-                if (index >= skip && collected < maxResults)
-                {
-                    files.Add(new StorableItemResult(Id: externalId, Name: file.Name, Type: "file"));
-                    collected++;
-                }
-                index++;
-            }
-
-            return new PaginatedItemsResult(Items: files.ToArray(), TotalCount: index, HasMore: index > skip + collected);
-        }
-        catch (McpException)
-        {
-            throw; // Re-throw MCP exceptions as-is
-        }
-        catch (Exception ex)
-        {
-            throw new McpException($"Failed to get folder files for '{folderId}': {ex.Message}", ex, McpErrorCode.InternalError);
-        }
-    }
-
-    [Description("Lists only folders in a folder by ID or path. Returns array of folder items.")]
-    public static async Task<PaginatedItemsResult> GetFolderSubfolders(string folderId, [Description("Maximum number of results to return. Default 50.")] int maxResults = 50, [Description("Number of items to skip for pagination. Default 0.")] int skip = 0)
-    {
-        var cancellationToken = CancellationToken.None;
-        try
-        {
-            // Quick validation for obviously invalid IDs
-            if (string.IsNullOrWhiteSpace(folderId))
-                throw new McpException("Folder ID cannot be empty", McpErrorCode.InvalidParams);
-
-            await EnsureStorableRegistered(folderId, cancellationToken);
-
-            // Archive guidance
-            if (_storableRegistry.TryGetValue(folderId, out var origItem3) && origItem3 is IFile && ProtocolRegistry.TryGetArchiveMountScheme(folderId, out var archiveScheme3) && !folderId.EndsWith("://"))
-                throw new McpException($"Archive file '{folderId}' is mounted as '{archiveScheme3}://'. Enumerate via '{archiveScheme3}://' instead of the physical file path.", McpErrorCode.InvalidParams);
-
-            if (!_storableRegistry.TryGetValue(folderId, out var registeredItem) || registeredItem is not IFolder folder)
-                throw new McpException($"Folder with ID '{folderId}' not found", McpErrorCode.InvalidParams);
-
-            var folders = new List<StorableItemResult>();
-            int index = 0;
-            int collected = 0;
-            await foreach (var subfolder in folder.GetFoldersAsync())
-            {
-                string subfolderId = ProtocolRegistry.IsCustomProtocol(folderId) ? CreateCustomItemId(folderId, subfolder.Name) : subfolder.Id;
-                _storableRegistry[subfolderId] = subfolder;
-                
-                // Use mount alias substitution to present shorter IDs externally
-                string externalId = ProtocolRegistry.SubstituteWithMountAlias(subfolderId);
-                // Ensure the alias also maps to the same item for external access
-                if (externalId != subfolderId)
-                    _storableRegistry[externalId] = subfolder;
-                externalId = EnsureFolderTrailingSlash(externalId, subfolder);
-                _storableRegistry[externalId] = subfolder;
-
-                if (index >= skip && collected < maxResults)
-                {
-                    folders.Add(new StorableItemResult(Id: externalId, Name: subfolder.Name, Type: "folder"));
-                    collected++;
-                }
-                index++;
-            }
-
-            return new PaginatedItemsResult(Items: folders.ToArray(), TotalCount: index, HasMore: index > skip + collected);
-        }
-        catch (McpException)
-        {
-            throw; // Re-throw MCP exceptions as-is
-        }
-        catch (Exception ex)
-        {
-            throw new McpException($"Failed to get folder subfolders for '{folderId}': {ex.Message}", ex, McpErrorCode.InternalError);
-        }
-    }
-
     [Description("Gets an item with a known ID by recursively searching through a folder hierarchy. The targetItemId must be a known storable ID, not a filename or search term.")]
-    public static async Task<StorableItemResult?> GetItemRecursively(string folderId, string targetItemId)
+    public static async Task<StorableItemResult?> GetItemRecursivelyById(string folderId, string targetItemId)
     {
         var cancellationToken = CancellationToken.None;
         try
@@ -894,7 +787,7 @@ public static class StorageTools
         }
     }
 
-    [Description("Reads the entire content of a file as text. Returns the full file — no truncation. For large files, use get_storable_info first to check sizeBytes/lineCount, then use read_file_text_range to read specific line ranges instead.")]
+    [Description("Reads the entire content of a file as text. Returns the full file if possible, but may be truncated by the system at an unknown length. For large files, use get_storable_info first to check sizeBytes/lineCount, then use read_file_text_range to read specific line ranges instead.")]
     public static async Task<string> ReadFileAsText([Description("The ID of the file to read.")] string fileId, string encoding = "UTF-8")
     {
         var cancellationToken = CancellationToken.None;
@@ -1048,7 +941,7 @@ public static class StorageTools
         }
     }
 
-    [Description("Gets the root folder of a storage item by tracing up the parent hierarchy.")]
+    [Description("Gets the root folder of a given storage item id.")]
     public static async Task<StorableItemResult?> GetRootFolder(string itemId)
     {
         var cancellationToken = CancellationToken.None;

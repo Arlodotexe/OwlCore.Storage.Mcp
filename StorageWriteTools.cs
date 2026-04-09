@@ -235,39 +235,6 @@ public static partial class StorageWriteTools
         }
     }
 
-    [Description("Writes text content to a file with specified encoding by file ID or path. The file must already exist — use create_file to create it first.")]
-    public static async Task<string> WriteFileAsTextWithEncoding(string fileId, string content, string encoding = "UTF-8")
-    {
-        var cancellationToken = CancellationToken.None;
-        try
-        {
-            await StorageTools.EnsureStorableRegistered(fileId, cancellationToken);
-
-            if (!_storableRegistry.TryGetValue(fileId, out var item) || item is not IFile file)
-                throw new McpException($"File with ID '{fileId}' not found", McpErrorCode.InvalidParams);
-
-            var textEncoding = encoding.ToUpperInvariant() switch
-            {
-                "UTF-8" or "UTF8" => Encoding.UTF8,
-                "UTF-16" or "UTF16" => Encoding.Unicode,
-                "ASCII" => Encoding.ASCII,
-                "UNICODE" => Encoding.Unicode,
-                _ => Encoding.UTF8
-            };
-
-            await file.WriteTextAsync(content, textEncoding);
-            return $"Successfully wrote {content.Length} characters to file '{file.Name}' using {encoding} encoding";
-        }
-        catch (McpException)
-        {
-            throw; // Re-throw MCP exceptions as-is
-        }
-        catch (Exception ex)
-        {
-            throw new McpException($"Failed to write text with encoding '{encoding}' to file '{fileId}': {ex.Message}", ex, McpErrorCode.InternalError);
-        }
-    }
-
     [Description("Deletes a file or folder by ID or path from its parent folder.")]
     public static async Task<string> DeleteItem(string parentFolderId, string itemName)
     {
