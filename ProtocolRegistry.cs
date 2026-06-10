@@ -158,6 +158,18 @@ public static class ProtocolRegistry
             MountSettings = new MountSettings(mcpSettingsFolder);
             await MountSettings.LoadAsync();
 
+            var persistedMounts = MountSettings.Mounts;
+            var ephemeralMounts = persistedMounts.Where(IsEphemeralMount).ToList();
+            if (ephemeralMounts.Count > 0)
+            {
+                foreach (var mount in ephemeralMounts)
+                    persistedMounts.Remove(mount);
+
+                MountSettings.Mounts = persistedMounts;
+                await MountSettings.SaveAsync();
+                Logger.LogInformation($"Removed {ephemeralMounts.Count} ephemeral memory mounts from persisted mount settings.");
+            }
+
             // Restore mounts in dependency order
             var mountsToRestore = MountSettings.GetMountsInDependencyOrder();
             var restoredCount = 0;
@@ -363,6 +375,10 @@ public static class ProtocolRegistry
     /// <returns>Collection of registered protocol schemes</returns>
     public static IEnumerable<string> GetRegisteredProtocols() => _protocolHandlers.Keys;
 
+    private static bool IsEphemeralMount(MountConfiguration mount) => IsEphemeralMountId(mount.OriginalStorableId);
+
+    private static bool IsEphemeralMountId(string id) => string.Equals(ExtractScheme(id), "memory", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>
     /// Generalized mounting: accepts either an IFolder or supported archive IFile. Replaces MountFolder internally.
     /// </summary>
@@ -410,7 +426,14 @@ public static class ProtocolRegistry
         // so the alias chain is self-sufficient for restoration.
         var idToStore = originalId ?? (storable is IStorableChild sc ? sc.Id : storable.Id);
 
-        MountSettings.AddOrUpdateMount(protocolScheme, idToStore, mountName, mountType);
+        if (IsEphemeralMountId(idToStore))
+        {
+            Logger.LogInformation($"Mounted ephemeral storable {rootUri} -> {idToStore}; mount will not persist across restarts.");
+        }
+        else
+        {
+            MountSettings.AddOrUpdateMount(protocolScheme, idToStore, mountName, mountType);
+        }
 
         if (mountType == StorableType.File)
             _mountedOriginalIds[idToStore] = protocolScheme;
