@@ -384,7 +384,7 @@ public static class FileLauncherTool
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
-                RedirectStandardInput = processStdin != null,
+                RedirectStandardInput = true,
                 CreateNoWindow = true,
                 WorkingDirectory = processWorkingDirectory
                     ?? Path.GetDirectoryName(localId)
@@ -396,33 +396,39 @@ public static class FileLauncherTool
                 throw new McpException($"Failed to start process: '{fileId}'", McpErrorCode.InternalError);
 
             if (processStdin != null)
-            {
                 await process.StandardInput.WriteAsync(processStdin);
-                process.StandardInput.Close();
-            }
+
+            process.StandardInput.Close();
 
             var stdoutTask = process.StandardOutput.ReadToEndAsync();
             var stderrTask = process.StandardError.ReadToEndAsync();
 
-            using var cts = new CancellationTokenSource(processStartTimeoutMs);
-            bool exited;
+            var processCompletionTask = Task.WhenAll(stdoutTask, stderrTask, process.WaitForExitAsync());
+            var timedOut = await Task.WhenAny(processCompletionTask, Task.Delay(processStartTimeoutMs)) != processCompletionTask;
 
-            try
-            {
-                await Task.WhenAll(stdoutTask, stderrTask, process.WaitForExitAsync(cts.Token));
-                exited = true;
-            }
-            catch (OperationCanceledException) when (cts.IsCancellationRequested)
-            {
-                exited = false;
-            }
-
-            var stdout = await stdoutTask;
-            var stderr = await stderrTask;
-
-            if (!exited)
+            if (timedOut)
             {
                 try { process.Kill(entireProcessTree: true); } catch { }
+
+                try { await processCompletionTask.WaitAsync(TimeSpan.FromSeconds(5)); } catch { }
+
+                if (!processCompletionTask.IsCompleted)
+                {
+                    try { process.StandardOutput.Close(); } catch { }
+                    try { process.StandardError.Close(); } catch { }
+                    try { await processCompletionTask.WaitAsync(TimeSpan.FromSeconds(1)); } catch { }
+                }
+            }
+            else
+            {
+                await processCompletionTask;
+            }
+
+            var stdout = stdoutTask.IsCompletedSuccessfully ? stdoutTask.Result : null;
+            var stderr = stderrTask.IsCompletedSuccessfully ? stderrTask.Result : null;
+
+            if (timedOut)
+            {
                 return new StartResult(
                     Mode: fileIdStartMode.ToString(),
                     ExitCode: -1,
