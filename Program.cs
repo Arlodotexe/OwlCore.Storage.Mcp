@@ -404,7 +404,18 @@ public static class FileLauncherTool
             var stdoutTask = process.StandardOutput.ReadToEndAsync();
             var stderrTask = process.StandardError.ReadToEndAsync();
 
-            var exited = process.WaitForExit(processStartTimeoutMs);
+            using var cts = new CancellationTokenSource(processStartTimeoutMs);
+            bool exited;
+
+            try
+            {
+                await Task.WhenAll(stdoutTask, stderrTask, process.WaitForExitAsync(cts.Token));
+                exited = true;
+            }
+            catch (OperationCanceledException) when (cts.IsCancellationRequested)
+            {
+                exited = false;
+            }
 
             var stdout = await stdoutTask;
             var stderr = await stderrTask;
