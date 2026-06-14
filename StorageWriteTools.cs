@@ -202,6 +202,14 @@ public static partial class StorageWriteTools
         
         // Add the new content (split into lines if it contains line breaks)
         var newContentLines = content.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
+        if (isReplaceRange)
+        {
+            int expectedLineCount = actualEndLine - startLine + 1;
+            if (newContentLines.Length != expectedLineCount)
+                throw new McpException(
+                    $"Line count mismatch: content has {newContentLines.Length} line(s) but explicit range {startLine}-{actualEndLine} spans {expectedLineCount} line(s). For this explicit range replacement, content must contain exactly {expectedLineCount} line(s).",
+                    McpErrorCode.InvalidParams);
+        }
         newLines.AddRange(newContentLines);
         
         // Add lines after the replaced range
@@ -209,6 +217,8 @@ public static partial class StorageWriteTools
             newLines.AddRange(lines[actualEndLine..]);
         
         var finalContent = string.Join(Environment.NewLine, newLines);
+        int replacedLineCount = actualEndLine - startLine + 1;
+        int lineCountDelta = newContentLines.Length - replacedLineCount;
         
         // Use OpenWriteAsync with SetLength(0) to ensure proper truncation
         using (var stream = await file.OpenWriteAsync(cancellationToken))
@@ -221,11 +231,11 @@ public static partial class StorageWriteTools
 
         // Return operation-aware message
         if (isInsert)
-            return $"Successfully inserted {newContentLines.Length} line(s) at line {startLine} in file '{file.Name}'. Original: {originalContent.Length} characters, New: {finalContent.Length} characters";
+            return $"Successfully inserted {newContentLines.Length} line(s) at line {startLine} in file '{file.Name}'. Lines written: {newContentLines.Length}; Line count delta: {lineCountDelta:+#;-#;0}; Original: {originalContent.Length} characters, New: {finalContent.Length} characters";
         else if (isReplaceToEnd)
-            return $"Successfully replaced {actualEndLine - startLine + 1} line(s) (lines {startLine} to EOF) with {newContentLines.Length} line(s) in file '{file.Name}'. Original: {originalContent.Length} characters, New: {finalContent.Length} characters";
+            return $"Successfully replaced {replacedLineCount} line(s) (lines {startLine} to EOF) with {newContentLines.Length} line(s) in file '{file.Name}'. Lines written: {newContentLines.Length}; Line count delta: {lineCountDelta:+#;-#;0}; Original: {originalContent.Length} characters, New: {finalContent.Length} characters";
         else // isReplaceRange
-            return $"Successfully replaced {actualEndLine - startLine + 1} line(s) (lines {startLine}-{actualEndLine}) with {newContentLines.Length} line(s) in file '{file.Name}'. Original: {originalContent.Length} characters, New: {finalContent.Length} characters";
+            return $"Successfully replaced {replacedLineCount} line(s) (lines {startLine}-{actualEndLine}) with {newContentLines.Length} line(s) in file '{file.Name}'. Lines written: {newContentLines.Length}; Line count delta: {lineCountDelta:+#;-#;0}; Original: {originalContent.Length} characters, New: {finalContent.Length} characters";
         }
         catch (McpException) { throw; }
         catch (Exception ex)
