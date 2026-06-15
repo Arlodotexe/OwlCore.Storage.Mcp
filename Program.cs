@@ -219,7 +219,7 @@ public enum StartMode
 
 public static class FileLauncherTool
 {
-    [Description($"Process.Start a specific {nameof(fileId)} using either {nameof(StartMode)}.{nameof(StartMode.ExecuteShellBinary)} to run/execute a shell binary/command with captured stdio (returns exitCode/stdout/stderr) or {nameof(StartMode)}.{nameof(StartMode.LaunchGraphicalApplication)} to open a document/media file in the default GUI app.")]
+    [Description($"Process.Start a specific {nameof(fileId)} using either {nameof(StartMode)}.{nameof(StartMode.ExecuteShellBinary)} to run/execute a shell binary/command with captured stdio (returns exitCode/stdout/stderr) or {nameof(StartMode)}.{nameof(StartMode.LaunchGraphicalApplication)} to open a file in the default GUI app. Not recommended for storage reads or writes.")]
     public static async Task<StartResult> Start(
         [Description($"Informs how to Process.Start the given {nameof(fileId)}: either {nameof(StartMode)}.{nameof(StartMode.ExecuteShellBinary)} to execute a binary with given stdin with captured stdio returning exitCode/stdout/stderr or {nameof(StartMode)}.{nameof(StartMode.LaunchGraphicalApplication)} to open a document/media/app in the default GUI handler.")] StartMode fileIdStartMode,
         [Description($"The ID of the binary file to {nameof(StartMode)}.{nameof(StartMode.ExecuteShellBinary)} or {nameof(StartMode)}.{nameof(StartMode.LaunchGraphicalApplication)} per {nameof(fileIdStartMode)}. This MUST be a file (never folder). This MUST NOT contain any {nameof(processArguments)}. File is copied to local storage if non-local file is given.")] string fileId,
