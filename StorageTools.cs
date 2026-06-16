@@ -787,7 +787,39 @@ public static class StorageTools
         }
     }
 
-    [Description("Reads the entire content of a file as text. Returns the full file if possible, but may be truncated by the system at an unknown length. For large files, use get_storable_info first to check sizeBytes/lineCount, then use read_file_text_range to read specific line ranges instead.")]
+    private const int ReadFileAsTextDefaultMaxLines = 100;
+    private const int ReadFileAsTextDefaultMaxColumns = 256;
+
+    private static string ApplyDefaultReadFileAsTextTruncation(string content)
+    {
+        var lines = content.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
+        var selectedLineCount = Math.Min(lines.Length, ReadFileAsTextDefaultMaxLines);
+        var selectedLines = new string[selectedLineCount];
+        var lineCountTruncated = lines.Length > ReadFileAsTextDefaultMaxLines;
+        var columnTruncated = false;
+
+        for (int i = 0; i < selectedLineCount; i++)
+        {
+            var line = lines[i];
+            if (line.Length > ReadFileAsTextDefaultMaxColumns)
+            {
+                selectedLines[i] = line[..ReadFileAsTextDefaultMaxColumns];
+                columnTruncated = true;
+            }
+            else
+            {
+                selectedLines[i] = line;
+            }
+        }
+
+        if (!lineCountTruncated && !columnTruncated)
+            return content;
+
+        return string.Join('\n', selectedLines)
+            + $"\n\n[Output truncated to {ReadFileAsTextDefaultMaxLines} lines and {ReadFileAsTextDefaultMaxColumns} columns per line. Use read_file_text_range for larger or more precise reads.]";
+    }
+
+    [Description("Reads a preview of file text, limited to 100 lines and 256 columns per line. Use for small files or quick previews. For larger or precise reads, use get_storable_info first, then use read_file_text_range.")]
     public static async Task<string> ReadFileAsText([Description("The ID of the file to read.")] string fileId, string encoding = "UTF-8")
     {
         var cancellationToken = CancellationToken.None;
@@ -807,7 +839,8 @@ public static class StorageTools
                 _ => Encoding.UTF8
             };
 
-            return await file.ReadTextAsync(textEncoding, CancellationToken.None);
+            var content = await file.ReadTextAsync(textEncoding, CancellationToken.None);
+            return ApplyDefaultReadFileAsTextTruncation(content);
         }
         catch (McpException)
         {
