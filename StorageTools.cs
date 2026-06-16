@@ -814,9 +814,9 @@ public static class StorageTools
 
         if (!lineCountTruncated && !columnTruncated)
             return content;
-
+        var returnedColumnCount = selectedLineCount == 0 ? 0 : selectedLines.Max(static line => line.Length);
         return string.Join('\n', selectedLines)
-            + $"\n\n[Output truncated to {ReadFileAsTextDefaultMaxLines} lines and {ReadFileAsTextDefaultMaxColumns} columns per line. Use read_file_text_range for larger or more precise reads.]";
+            + $"\n\n[Output truncated to {selectedLineCount} lines and up to {returnedColumnCount} columns per line. Use read_file_text_range for larger or more precise reads.]";
     }
 
     [Description("Reads a preview of file text, limited to 100 lines and 256 columns per line. Use for small files or quick previews. For larger or precise reads, use get_storable_info first, then use read_file_text_range.")]
