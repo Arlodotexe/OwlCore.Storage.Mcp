@@ -152,90 +152,77 @@ public static partial class StorageWriteTools
         }
     }
 
-    [Description("Writes text content to a specific line range in a file (1-based indexing). The file must already exist — use create_file to create it first. endLine semantics: null=insert at startLine, -1=replace from startLine to EOF, positive N=replace lines startLine through N.")]
-    public static async Task<string> WriteFileTextRange(string fileId, string content, int startLine, int? endLine = null)
+    [Description("Overwrites lines in an existing file (use create_file first if it doesn't exist). By default writes a single line at startLine; pass endLine to replace the inclusive 1-based range [startLine, endLine]. Strict by default: content must have exactly as many lines as the target range, preserving the file's line count. A write either grows or shrinks the range, never both — pass allowMoreLines=true when content has more lines than the range (grow), or allowLessLines=true when it has fewer (shrink). Setting both is rejected. To append, set startLine to one past the last line and pass allowMoreLines=true. No sentinel values — targeting the end of the file requires knowing the line count.")]
+    public static async Task<string> WriteFileTextRange(string fileId, string content, int startLine, int? endLine = null, bool? allowMoreLines = null, bool? allowLessLines = null)
     {
         try
         {
-        var cancellationToken = CancellationToken.None;
-        await StorageTools.EnsureStorableRegistered(fileId, cancellationToken);
+            var cancellationToken = CancellationToken.None;
+            await StorageTools.EnsureStorableRegistered(fileId, cancellationToken);
 
-        if (!_storableRegistry.TryGetValue(fileId, out var item) || item is not IFile file)
-            throw new McpException($"File with ID '{fileId}' not found", McpErrorCode.InvalidParams);
+            if (!_storableRegistry.TryGetValue(fileId, out var item) || item is not IFile file)
+                throw new McpException($"File with ID '{fileId}' not found", McpErrorCode.InvalidParams);
 
-        // Validate endLine semantics: null=insert, -1=replace to end, positive=replace range
-        if (endLine.HasValue && endLine.Value < -1)
-            throw new McpException($"Invalid endLine value: {endLine.Value}. Must be null (insert), -1 (replace to EOF), or >= 1 (replace through line N)", McpErrorCode.InvalidParams);
-        
-        if (endLine.HasValue && endLine.Value == 0)
-            throw new McpException($"Invalid endLine value: 0. Use -1 for replace to EOF, or positive value for specific line", McpErrorCode.InvalidParams);
+            var originalContent = await file.ReadTextAsync(cancellationToken);
+            var lines = originalContent.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
 
-        var originalContent = await file.ReadTextAsync(CancellationToken.None);
-        var lines = originalContent.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
-        
-        // Validate line numbers (1-based)
-        if (startLine < 1 || startLine > lines.Length + 1)
-            throw new McpException($"Invalid startLine: {startLine}. Must be between 1 and {lines.Length + 1} (file has {lines.Length} lines)", McpErrorCode.InvalidParams);
-        
-        // Determine operation from endLine semantics
-        bool isInsert = !endLine.HasValue;
-        bool isReplaceToEnd = endLine.HasValue && endLine.Value == -1;
-        bool isReplaceRange = endLine.HasValue && endLine.Value > 0;
-        
-        // Calculate the actual end line
-        int actualEndLine;
-        if (isInsert)
-            actualEndLine = startLine - 1;  // Insert before startLine
-        else if (isReplaceToEnd)
-            actualEndLine = lines.Length;   // Replace to end of file
-        else // isReplaceRange
-            actualEndLine = endLine!.Value; // Replace through specified endLine
-        
-        if (actualEndLine < startLine - 1 || actualEndLine > lines.Length)
-            throw new McpException($"Invalid endLine range: {actualEndLine}. Must be between {startLine - 1} and {lines.Length}", McpErrorCode.InvalidParams);
+            // startLine is 1-based and may be one past the last line (the append position).
+            if (startLine < 1 || startLine > lines.Length + 1)
+                throw new McpException($"Invalid startLine: {startLine}. Must be between 1 and {lines.Length + 1} (file has {lines.Length} lines)", McpErrorCode.InvalidParams);
 
-        // Build the new content
-        var newLines = new List<string>();
-        
-        // Add lines before the range
-        newLines.AddRange(lines[0..(startLine - 1)]);
-        
-        // Add the new content (split into lines if it contains line breaks)
-        var newContentLines = content.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
-        if (isReplaceRange)
-        {
-            int expectedLineCount = actualEndLine - startLine + 1;
-            if (newContentLines.Length != expectedLineCount)
+            // endLine is the inclusive end of the range being overwritten. There are no sentinel values.
+            // Omitted => the single line at startLine, or an empty range at the append position when startLine is past EOF.
+            int effectiveEndLine = endLine ?? (startLine <= lines.Length ? startLine : startLine - 1);
+            if (effectiveEndLine < startLine - 1 || effectiveEndLine > lines.Length)
+                throw new McpException($"Invalid endLine: {effectiveEndLine}. Must be between {startLine - 1} and {lines.Length} (file has {lines.Length} lines)", McpErrorCode.InvalidParams);
+
+            int rangeLineCount = effectiveEndLine - startLine + 1; // 0 at the append position
+            var newContentLines = content.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
+
+            // A single write moves the line count in one direction only. Permitting both growth and shrink
+            // at once erases the caller's stated intent, so it's a misfire rather than a valid free-form mode.
+            if (allowMoreLines == true && allowLessLines == true)
                 throw new McpException(
-                    $"Line count mismatch: content has {newContentLines.Length} line(s) but explicit range {startLine}-{actualEndLine} spans {expectedLineCount} line(s). For this explicit range replacement, content must contain exactly {expectedLineCount} line(s).",
+                    "Conflicting flags: allowMoreLines and allowLessLines cannot both be true. A write either grows or shrinks the range — pass the one matching your content's line count relative to the range.",
                     McpErrorCode.InvalidParams);
-        }
-        newLines.AddRange(newContentLines);
-        
-        // Add lines after the replaced range
-        if (actualEndLine < lines.Length)
-            newLines.AddRange(lines[actualEndLine..]);
-        
-        var finalContent = string.Join(Environment.NewLine, newLines);
-        int replacedLineCount = actualEndLine - startLine + 1;
-        int lineCountDelta = newContentLines.Length - replacedLineCount;
-        
-        // Use OpenWriteAsync with SetLength(0) to ensure proper truncation
-        using (var stream = await file.OpenWriteAsync(cancellationToken))
-        {
-            stream.SetLength(0);  // Truncate old content
-            using var writer = new StreamWriter(stream, new UTF8Encoding(false), leaveOpen: false);
-            await writer.WriteAsync(finalContent);
-            await writer.FlushAsync();
-        }
 
-        // Return operation-aware message
-        if (isInsert)
-            return $"Successfully inserted {newContentLines.Length} line(s) at line {startLine} in file '{file.Name}'. Lines written: {newContentLines.Length}; Line count delta: {lineCountDelta:+#;-#;0}; Original: {originalContent.Length} characters, New: {finalContent.Length} characters";
-        else if (isReplaceToEnd)
-            return $"Successfully replaced {replacedLineCount} line(s) (lines {startLine} to EOF) with {newContentLines.Length} line(s) in file '{file.Name}'. Lines written: {newContentLines.Length}; Line count delta: {lineCountDelta:+#;-#;0}; Original: {originalContent.Length} characters, New: {finalContent.Length} characters";
-        else // isReplaceRange
-            return $"Successfully replaced {replacedLineCount} line(s) (lines {startLine}-{actualEndLine}) with {newContentLines.Length} line(s) in file '{file.Name}'. Lines written: {newContentLines.Length}; Line count delta: {lineCountDelta:+#;-#;0}; Original: {originalContent.Length} characters, New: {finalContent.Length} characters";
+            // Strict by default: content must exactly fill the range (structure-preserving replace).
+            // The two flags lift the bounds independently: allowMoreLines permits growth, allowLessLines permits shrink.
+            if (allowMoreLines != true && newContentLines.Length > rangeLineCount)
+                throw new McpException(
+                    $"Too many lines: content has {newContentLines.Length} line(s) but the range {startLine}-{effectiveEndLine} spans {rangeLineCount} line(s). Provide exactly {rangeLineCount} line(s), or pass allowMoreLines=true to add lines.",
+                    McpErrorCode.InvalidParams);
+
+            if (allowLessLines != true && newContentLines.Length < rangeLineCount)
+                throw new McpException(
+                    $"Too few lines: content has {newContentLines.Length} line(s) but the range {startLine}-{effectiveEndLine} spans {rangeLineCount} line(s). Provide exactly {rangeLineCount} line(s), or pass allowLessLines=true to remove lines.",
+                    McpErrorCode.InvalidParams);
+
+            // Build the new content: lines before the range + content + lines after the range.
+            var newLines = new List<string>(lines.Length + newContentLines.Length);
+            newLines.AddRange(lines[0..(startLine - 1)]);
+            newLines.AddRange(newContentLines);
+            if (effectiveEndLine < lines.Length)
+                newLines.AddRange(lines[effectiveEndLine..]);
+
+            var finalContent = string.Join(Environment.NewLine, newLines);
+            int lineCountDelta = newContentLines.Length - rangeLineCount;
+
+            // Use OpenWriteAsync with SetLength(0) to ensure proper truncation
+            using (var stream = await file.OpenWriteAsync(cancellationToken))
+            {
+                stream.SetLength(0);  // Truncate old content
+                using var writer = new StreamWriter(stream, new UTF8Encoding(false), leaveOpen: false);
+                await writer.WriteAsync(finalContent);
+                await writer.FlushAsync();
+            }
+
+            string action = rangeLineCount == 0
+                ? $"inserted {newContentLines.Length} line(s) before line {startLine}"
+                : lineCountDelta == 0
+                    ? $"replaced {rangeLineCount} line(s) (lines {startLine}-{effectiveEndLine})"
+                    : $"replaced {rangeLineCount} line(s) (lines {startLine}-{effectiveEndLine}) with {newContentLines.Length} line(s)";
+            return $"Successfully {action} in file '{file.Name}'. Line count delta: {lineCountDelta:+#;-#;0}; Original: {originalContent.Length} characters, New: {finalContent.Length} characters";
         }
         catch (McpException) { throw; }
         catch (Exception ex)
