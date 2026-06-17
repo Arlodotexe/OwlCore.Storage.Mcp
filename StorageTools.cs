@@ -797,10 +797,14 @@ public static class StorageTools
         var selectedLines = new string[selectedLineCount];
         var lineCountTruncated = lines.Length > ReadFileAsTextDefaultMaxLines;
         var columnTruncated = false;
+        var maxSelectedLineLength = 0;
 
         for (int i = 0; i < selectedLineCount; i++)
         {
             var line = lines[i];
+            if (line.Length > maxSelectedLineLength)
+                maxSelectedLineLength = line.Length;
+
             if (line.Length > ReadFileAsTextDefaultMaxColumns)
             {
                 selectedLines[i] = line[..ReadFileAsTextDefaultMaxColumns];
@@ -814,9 +818,12 @@ public static class StorageTools
 
         if (!lineCountTruncated && !columnTruncated)
             return content;
-        var returnedColumnCount = selectedLineCount == 0 ? 0 : selectedLines.Max(static line => line.Length);
+
+        var excludedColumnCount = Math.Max(0, maxSelectedLineLength - ReadFileAsTextDefaultMaxColumns);
+        var excludedLineCount = Math.Max(0, lines.Length - selectedLineCount);
+
         return string.Join('\n', selectedLines)
-            + $"\n\n[Output truncated to {selectedLineCount} lines and up to {returnedColumnCount} columns per line. Use read_file_text_range for larger or more precise reads.]";
+            + $"\n\n[Output truncated, excluded {excludedLineCount} lines and {excludedColumnCount} columns. Use read_file_text_range for larger or more precise reads.]";
     }
 
     [Description("Reads a preview of file text, limited to 100 lines and 256 columns per line. Use for small files or quick previews. For larger or precise reads, use get_storable_info first, then use read_file_text_range.")]
