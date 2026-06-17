@@ -152,7 +152,7 @@ public static partial class StorageWriteTools
         }
     }
 
-    [Description("Overwrites lines in an existing file (use create_file first if it doesn't exist). By default writes a single line at startLine; pass endLine to replace the inclusive 1-based range [startLine, endLine]. Strict by default: content must have exactly as many lines as the target range, preserving the file's line count. A write either grows or shrinks the range, never both — pass allowMoreLines=true when content has more lines than the range (grow), or allowLessLines=true when it has fewer (shrink). Setting both is rejected. To append, set startLine to one past the last line and pass allowMoreLines=true. No sentinel values — targeting the end of the file requires knowing the line count.")]
+    [Description("Overwrites lines in an existing file (use create_file first if it doesn't exist). By default writes a single line at startLine; pass endLine to replace the inclusive 1-based range [startLine, endLine], which must satisfy startLine <= endLine <= line count. Strict by default: content must have exactly as many lines as the target range, preserving the file's line count. A write either grows or shrinks the range, never both — pass allowMoreLines=true when content has more lines than the range (grow), or allowLessLines=true when it has fewer (shrink). Setting both is rejected. No sentinel values: there is no position past the last line, so appending means replacing the last line (grow) with its existing content plus the new lines, which requires knowing the line count.")]
     public static async Task<string> WriteFileTextRange(string fileId, string content, int startLine, int? endLine = null, bool? allowMoreLines = null, bool? allowLessLines = null)
     {
         try
@@ -166,17 +166,17 @@ public static partial class StorageWriteTools
             var originalContent = await file.ReadTextAsync(cancellationToken);
             var lines = originalContent.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
 
-            // startLine is 1-based and may be one past the last line (the append position).
-            if (startLine < 1 || startLine > lines.Length + 1)
-                throw new McpException($"Invalid startLine: {startLine}. Must be between 1 and {lines.Length + 1} (file has {lines.Length} lines)", McpErrorCode.InvalidParams);
+            // startLine is a 1-based line that must exist in the file.
+            if (startLine < 1 || startLine > lines.Length)
+                throw new McpException($"Invalid startLine: {startLine}. Must be between 1 and {lines.Length} (file has {lines.Length} lines)", McpErrorCode.InvalidParams);
 
-            // endLine is the inclusive end of the range being overwritten. There are no sentinel values.
-            // Omitted => the single line at startLine, or an empty range at the append position when startLine is past EOF.
-            int effectiveEndLine = endLine ?? (startLine <= lines.Length ? startLine : startLine - 1);
-            if (effectiveEndLine < startLine - 1 || effectiveEndLine > lines.Length)
-                throw new McpException($"Invalid endLine: {effectiveEndLine}. Must be between {startLine - 1} and {lines.Length} (file has {lines.Length} lines)", McpErrorCode.InvalidParams);
+            // endLine is the inclusive end of the range being overwritten. Omitted => the single line at startLine.
+            // The range is never empty and never inverted: startLine <= endLine <= line count.
+            int effectiveEndLine = endLine ?? startLine;
+            if (effectiveEndLine < startLine || effectiveEndLine > lines.Length)
+                throw new McpException($"Invalid endLine: {effectiveEndLine}. Must be between {startLine} and {lines.Length} (file has {lines.Length} lines)", McpErrorCode.InvalidParams);
 
-            int rangeLineCount = effectiveEndLine - startLine + 1; // 0 at the append position
+            int rangeLineCount = effectiveEndLine - startLine + 1; // always >= 1
             var newContentLines = content.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
 
             // A single write moves the line count in one direction only. Permitting both growth and shrink
@@ -217,11 +217,9 @@ public static partial class StorageWriteTools
                 await writer.FlushAsync();
             }
 
-            string action = rangeLineCount == 0
-                ? $"inserted {newContentLines.Length} line(s) before line {startLine}"
-                : lineCountDelta == 0
-                    ? $"replaced {rangeLineCount} line(s) (lines {startLine}-{effectiveEndLine})"
-                    : $"replaced {rangeLineCount} line(s) (lines {startLine}-{effectiveEndLine}) with {newContentLines.Length} line(s)";
+            string action = lineCountDelta == 0
+                ? $"replaced {rangeLineCount} line(s) (lines {startLine}-{effectiveEndLine})"
+                : $"replaced {rangeLineCount} line(s) (lines {startLine}-{effectiveEndLine}) with {newContentLines.Length} line(s)";
             return $"Successfully {action} in file '{file.Name}'. Line count delta: {lineCountDelta:+#;-#;0}; Original: {originalContent.Length} characters, New: {finalContent.Length} characters";
         }
         catch (McpException) { throw; }
