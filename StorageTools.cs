@@ -796,19 +796,18 @@ public static class StorageTools
         var selectedLineCount = Math.Min(lines.Length, ReadFileAsTextDefaultMaxLines);
         var selectedLines = new string[selectedLineCount];
         var lineCountTruncated = lines.Length > ReadFileAsTextDefaultMaxLines;
-        var columnTruncated = false;
-        var maxSelectedLineLength = 0;
+        var columnTruncationDetails = new List<string>();
 
         for (int i = 0; i < selectedLineCount; i++)
         {
             var line = lines[i];
-            if (line.Length > maxSelectedLineLength)
-                maxSelectedLineLength = line.Length;
 
             if (line.Length > ReadFileAsTextDefaultMaxColumns)
             {
                 selectedLines[i] = line[..ReadFileAsTextDefaultMaxColumns];
-                columnTruncated = true;
+                var excludedColumns = line.Length - ReadFileAsTextDefaultMaxColumns;
+                var columnLabel = excludedColumns == 1 ? "column" : "columns";
+                columnTruncationDetails.Add($"{excludedColumns} {columnLabel} on line {i + 1}");
             }
             else
             {
@@ -816,14 +815,21 @@ public static class StorageTools
             }
         }
 
-        if (!lineCountTruncated && !columnTruncated)
+        if (!lineCountTruncated && columnTruncationDetails.Count == 0)
             return content;
 
-        var excludedColumnCount = Math.Max(0, maxSelectedLineLength - ReadFileAsTextDefaultMaxColumns);
         var excludedLineCount = Math.Max(0, lines.Length - selectedLineCount);
+        var truncationParts = new List<string>();
+        if (excludedLineCount > 0)
+        {
+            var lineLabel = excludedLineCount == 1 ? "line" : "lines";
+            truncationParts.Add($"{excludedLineCount} {lineLabel}");
+        }
+        if (columnTruncationDetails.Count > 0)
+            truncationParts.Add(string.Join(", ", columnTruncationDetails));
 
         return string.Join('\n', selectedLines)
-            + $"\n\n[Output truncated, excluded {excludedLineCount} lines and {excludedColumnCount} columns. Use read_file_text_range for larger or more precise reads.]";
+            + $"\n\n[Output truncated, excluded {string.Join(", ", truncationParts)}. Use read_file_text_range for larger or more precise reads.]";
     }
 
     [Description("Reads a preview of file text, limited to 100 lines and 256 columns per line. Use for small files or quick previews. For larger or precise reads, use get_storable_info first, then use read_file_text_range.")]
