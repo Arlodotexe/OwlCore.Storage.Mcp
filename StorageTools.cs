@@ -883,11 +883,11 @@ public static class StorageTools
             
             // Validate line numbers (1-based)
             if (startLine < 1 || startLine > lines.Length)
-                throw new McpException($"Invalid startLine: {startLine}. Stop blindly writing and use get_storable_info upfront for line count. Must be between 1 and {lines.Length} (file has {lines.Length} lines)", McpErrorCode.InvalidParams);
+                throw new McpException($"Invalid startLine: {startLine}. Stop blindly reading and use get_storable_info upfront for line count. Must be between 1 and {lines.Length} (file has {lines.Length} lines)", McpErrorCode.InvalidParams);
             
             int actualEndLine = endLine ?? lines.Length;
             if (actualEndLine < startLine || actualEndLine > lines.Length)
-                throw new McpException($"Invalid endLine: {actualEndLine}. Must be between {startLine} and {lines.Length}. Stop blindly writing and use get_storable_info upfront for line count.", McpErrorCode.InvalidParams);
+                throw new McpException($"Invalid endLine: {actualEndLine}. Must be between {startLine} and {lines.Length}. Stop blindly reading and use get_storable_info upfront for line count.", McpErrorCode.InvalidParams);
 
             // Extract the requested range (convert to 0-based indexing)
             var selectedLines = lines[(startLine - 1)..actualEndLine];

@@ -168,13 +168,13 @@ public static partial class StorageWriteTools
 
             // startLine is a 1-based line that must exist in the file.
             if (startLine < 1 || startLine > lines.Length)
-                throw new McpException($"Invalid startLine: {startLine}. Must be between 1 and {lines.Length} (file has {lines.Length} lines)", McpErrorCode.InvalidParams);
+                throw new McpException($"Invalid startLine: {startLine}. Stop blindly writing and use get_storable_info up front for line count. Must be between 1 and {lines.Length} (file has {lines.Length} lines)", McpErrorCode.InvalidParams);
 
             // endLine is the inclusive end of the range being overwritten. Omitted => the single line at startLine.
             // The range is never empty and never inverted: startLine <= endLine <= line count.
             int effectiveEndLine = endLine ?? startLine;
             if (effectiveEndLine < startLine || effectiveEndLine > lines.Length)
-                throw new McpException($"Invalid endLine: {effectiveEndLine}. Must be between {startLine} and {lines.Length} (file has {lines.Length} lines)", McpErrorCode.InvalidParams);
+                throw new McpException($"Invalid endLine: {effectiveEndLine}. Stop blindly writing and use get_storable_info up front for line count. Must be between {startLine} and {lines.Length} (file has {lines.Length} lines)", McpErrorCode.InvalidParams);
 
             int rangeLineCount = effectiveEndLine - startLine + 1; // always >= 1
             var newContentLines = content.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
