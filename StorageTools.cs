@@ -887,7 +887,7 @@ public static class StorageTools
             
             int actualEndLine = endLine ?? lines.Length;
             if (actualEndLine < startLine || actualEndLine > lines.Length)
-                throw new McpException($"Invalid endLine: {actualEndLine}. Must be between {startLine} and {lines.Length}. Next time, use get_storable_info upfront for line count.", McpErrorCode.InvalidParams);
+                throw new McpException($"Invalid endLine: {actualEndLine}. Must be between {startLine} and {lines.Length}. Stop blindly reading and use get_storable_info upfront for line count.", McpErrorCode.InvalidParams);
 
             // Extract the requested range (convert to 0-based indexing)
             var selectedLines = lines[(startLine - 1)..actualEndLine];
