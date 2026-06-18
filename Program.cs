@@ -219,9 +219,9 @@ public enum StartMode
 
 public static class FileLauncherTool
 {
-    [Description($"Process.Start a specific {nameof(fileId)} using either {nameof(StartMode)}.{nameof(StartMode.ExecuteShellBinary)} to run/execute a shell binary/command with captured stdio (returns exitCode/stdout/stderr) or {nameof(StartMode)}.{nameof(StartMode.LaunchGraphicalApplication)} to open a file in the default GUI app. Not recommended for storage reads or writes.")]
+    [Description($"Process.Start a specific {nameof(fileId)} using either {nameof(StartMode)}.{nameof(StartMode.ExecuteShellBinary)} (0) to run/execute a shell binary/command with captured stdio (returns exitCode/stdout/stderr) or {nameof(StartMode)}.{nameof(StartMode.LaunchGraphicalApplication)} (1) to open a file in the default GUI app. Not recommended for storage reads or writes.")]
     public static async Task<StartResult> Start(
-        [Description($"Informs how to Process.Start the given {nameof(fileId)}: either {nameof(StartMode)}.{nameof(StartMode.ExecuteShellBinary)} to execute a binary with given stdin with captured stdio returning exitCode/stdout/stderr or {nameof(StartMode)}.{nameof(StartMode.LaunchGraphicalApplication)} to open a document/media/app in the default GUI handler.")] StartMode fileIdStartMode,
+        [Description($"Informs how to Process.Start the given {nameof(fileId)}. Valid values: 0 = {nameof(StartMode)}.{nameof(StartMode.ExecuteShellBinary)} to execute a binary with captured stdio; 1 = {nameof(StartMode)}.{nameof(StartMode.LaunchGraphicalApplication)} to open a document/media/app in the default GUI handler. Do not pass out-of-range values.")] StartMode fileIdStartMode,
         [Description($"The ID of the binary file to {nameof(StartMode)}.{nameof(StartMode.ExecuteShellBinary)} or {nameof(StartMode)}.{nameof(StartMode.LaunchGraphicalApplication)} per {nameof(fileIdStartMode)}. This MUST be a file (never folder). This MUST NOT contain any {nameof(processArguments)}. File is copied to local storage if non-local file is given.")] string fileId,
         [Description("The process arguments and parameters to pass to the started file.")] string processArguments = "",
         [Description("Working directory for the process to start in.")] string? processWorkingDirectory = null,
@@ -232,6 +232,15 @@ public static class FileLauncherTool
     {
         try
         {
+            if (!Enum.IsDefined(fileIdStartMode))
+            {
+                var validModes = string.Join(", ", Enum.GetValues<StartMode>().Select(mode => $"{(int)mode} ({mode})"));
+                throw new McpException(
+                    $"Invalid {nameof(fileIdStartMode)} value '{(int)fileIdStartMode}'. Valid values are: {validModes}. " +
+                    $"Use 0 for {nameof(StartMode.ExecuteShellBinary)} or 1 for {nameof(StartMode.LaunchGraphicalApplication)}; sentinel and out-of-range values are not supported.",
+                    McpErrorCode.InvalidParams);
+            }
+
             if (string.IsNullOrWhiteSpace(fileId))
                 throw new McpException("File ID cannot be empty", McpErrorCode.InvalidParams);
 
