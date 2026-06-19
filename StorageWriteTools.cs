@@ -183,19 +183,19 @@ public static partial class StorageWriteTools
             // at once erases the caller's stated intent, so it's a misfire rather than a valid free-form mode.
             if (allowMoreLines == true && allowLessLines == true)
                 throw new McpException(
-                    "Conflicting flags: allowMoreLines and allowLessLines cannot both be true. A write either grows or shrinks the range — pass the one matching your content's line count relative to the range.",
+                    "Conflicting flags: allowMoreLines and allowLessLines cannot both be true. A write either grows or shrinks the range — check yourself for an erroneous write attempt, and pass the one matching your content's line count relative to the range. ",
                     McpErrorCode.InvalidParams);
 
             // Strict by default: content must exactly fill the range (structure-preserving replace).
             // The two flags lift the bounds independently: allowMoreLines permits growth, allowLessLines permits shrink.
             if (allowMoreLines != true && newContentLines.Length > rangeLineCount)
                 throw new McpException(
-                    $"Too many lines: content has {newContentLines.Length} line(s) but the range {startLine}-{effectiveEndLine} spans {rangeLineCount} line(s). Provide exactly {rangeLineCount} line(s), or pass allowMoreLines=true to add lines.",
+                    $"Too many lines: content has {newContentLines.Length} line(s) but the range {startLine}-{effectiveEndLine} spans {rangeLineCount} line(s). Provide exactly {rangeLineCount} line(s), or if intentional (check yourself for an erroneous write attempt) pass allowMoreLines=true to add lines.",
                     McpErrorCode.InvalidParams);
 
             if (allowLessLines != true && newContentLines.Length < rangeLineCount)
                 throw new McpException(
-                    $"Too few lines: content has {newContentLines.Length} line(s) but the range {startLine}-{effectiveEndLine} spans {rangeLineCount} line(s). Provide exactly {rangeLineCount} line(s), or pass allowLessLines=true to remove lines.",
+                    $"Too few lines: content has {newContentLines.Length} line(s) but the range {startLine}-{effectiveEndLine} spans {rangeLineCount} line(s). Provide exactly {rangeLineCount} line(s), or if intentional (check yourself for an erroneous write attempt) pass allowLessLines=true to remove lines.",
                     McpErrorCode.InvalidParams);
 
             // Build the new content: lines before the range + content + lines after the range.
