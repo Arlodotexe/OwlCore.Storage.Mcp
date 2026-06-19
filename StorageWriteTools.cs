@@ -132,13 +132,19 @@ public static partial class StorageWriteTools
                 throw new McpException($"File with ID '{fileId}' not found", McpErrorCode.InvalidParams);
 
             // Use OpenWriteAsync with SetLength(0) to ensure proper truncation
-            using (var stream = await file.OpenWriteAsync(cancellationToken))
+            var fileSem = StorageTools._fileAccessSemaphores.GetOrAdd(file.Id, _ => new SemaphoreSlim(1, 1));
+            await fileSem.WaitAsync(cancellationToken);
+            try
             {
-                stream.SetLength(0);  // Truncate old content
-                using var writer = new StreamWriter(stream, new UTF8Encoding(false), leaveOpen: false);
-                await writer.WriteAsync(content);
-                await writer.FlushAsync();
+                using (var stream = await file.OpenWriteAsync(cancellationToken))
+                {
+                    stream.SetLength(0);  // Truncate old content
+                    using var writer = new StreamWriter(stream, new UTF8Encoding(false), leaveOpen: false);
+                    await writer.WriteAsync(content);
+                    await writer.FlushAsync();
+                }
             }
+            finally { fileSem.Release(); }
             
             return $"Successfully wrote {content.Length} characters to file '{file.Name}'";
         }
@@ -155,6 +161,8 @@ public static partial class StorageWriteTools
     [Description("Overwrites lines in an existing file (use create_file first if it doesn't exist). By default writes a single line at startLine; pass endLine to replace the inclusive 1-based range [startLine, endLine], which must satisfy startLine <= endLine <= line count. Strict by default: content must have exactly as many lines as the target range, preserving the file's line count. A write either grows or shrinks the range, never both — pass allowMoreLines=true when content has more lines than the range (grow), or allowLessLines=true when it has fewer (shrink). Setting both is rejected. No sentinel values: there is no position past the last line, so appending means replacing the last line (grow) with its existing content plus the new lines, which requires knowing the line count.")]
     public static async Task<string> WriteFileTextRange(string fileId, string content, int startLine, int? endLine = null, bool? allowMoreLines = null, bool? allowLessLines = null)
     {
+        SemaphoreSlim? fileSem = null;
+        bool semAcquired = false;
         try
         {
             var cancellationToken = CancellationToken.None;
@@ -163,6 +171,9 @@ public static partial class StorageWriteTools
             if (!_storableRegistry.TryGetValue(fileId, out var item) || item is not IFile file)
                 throw new McpException($"File with ID '{fileId}' not found", McpErrorCode.InvalidParams);
 
+            fileSem = StorageTools._fileAccessSemaphores.GetOrAdd(file.Id, _ => new SemaphoreSlim(1, 1));
+            await fileSem.WaitAsync(cancellationToken);
+            semAcquired = true;
             var originalContent = await file.ReadTextAsync(cancellationToken);
             var lines = originalContent.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
 
@@ -228,6 +239,7 @@ public static partial class StorageWriteTools
             Logger.LogError($"{nameof(WriteFileTextRange)} failed for '{fileId}': {ex}", ex);
             throw new McpException($"Failed to write text range in '{fileId}': {ex.Message}", ex, McpErrorCode.InternalError);
         }
+        finally { if (semAcquired) fileSem!.Release(); }
     }
 
     [Description("Deletes a file or folder by ID or path from its parent folder.")]

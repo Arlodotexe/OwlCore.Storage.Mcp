@@ -17,6 +17,8 @@ public static class StorageTools
     internal static readonly ConcurrentDictionary<string, IStorable> _storableRegistry = new();
     private static volatile bool _isInitialized = false;
     private static readonly SemaphoreSlim _initializationSemaphore = new(1, 1);
+    // Semaphores are never pruned; entries accumulate for every distinct file.Id ever accessed.
+    internal static readonly ConcurrentDictionary<string, SemaphoreSlim> _fileAccessSemaphores = new();
     
     /// <summary>
     /// Ensures folder IDs consistently end with a trailing slash.
@@ -591,7 +593,11 @@ public static class StorageTools
                 {
                     try
                     {
-                        var content = await file.ReadTextAsync(CancellationToken.None);
+                        var fileSem = _fileAccessSemaphores.GetOrAdd(file.Id, _ => new SemaphoreSlim(1, 1));
+                        await fileSem.WaitAsync(CancellationToken.None);
+                        string content;
+                        try { content = await file.ReadTextAsync(CancellationToken.None); }
+                        finally { fileSem.Release(); }
                         var lines2 = content.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
                         var matches = new List<ContentMatchLine>();
 
@@ -852,7 +858,11 @@ public static class StorageTools
                 _ => Encoding.UTF8
             };
 
-            var content = await file.ReadTextAsync(textEncoding, CancellationToken.None);
+            var fileSem = _fileAccessSemaphores.GetOrAdd(file.Id, _ => new SemaphoreSlim(1, 1));
+            await fileSem.WaitAsync(cancellationToken);
+            string content;
+            try { content = await file.ReadTextAsync(textEncoding, CancellationToken.None); }
+            finally { fileSem.Release(); }
             return ApplyDefaultReadFileAsTextTruncation(content);
         }
         catch (McpException)
@@ -884,7 +894,11 @@ public static class StorageTools
             if (columnLimit.HasValue && columnLimit.Value <= 0)
                 throw new McpException($"Invalid columnLimit: {columnLimit.Value}. Must be a positive integer, or null to disable the limit.", McpErrorCode.InvalidParams);
 
-            var content = await file.ReadTextAsync(CancellationToken.None);
+            var fileSem = _fileAccessSemaphores.GetOrAdd(file.Id, _ => new SemaphoreSlim(1, 1));
+            await fileSem.WaitAsync(cancellationToken);
+            string content;
+            try { content = await file.ReadTextAsync(CancellationToken.None); }
+            finally { fileSem.Release(); }
             var lines = content.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
             
             // Validate line numbers (1-based)
@@ -948,8 +962,14 @@ public static class StorageTools
             {
                 try
                 {
-                    using var stream = await file.OpenStreamAsync(FileAccess.Read, CancellationToken.None);
-                    sizeBytes = stream.Length;
+                    var fileSem1 = _fileAccessSemaphores.GetOrAdd(file.Id, _ => new SemaphoreSlim(1, 1));
+                    await fileSem1.WaitAsync(CancellationToken.None);
+                    try
+                    {
+                        using var stream = await file.OpenStreamAsync(FileAccess.Read, CancellationToken.None);
+                        sizeBytes = stream.Length;
+                    }
+                    finally { fileSem1.Release(); }
                 }
                 catch
                 {
@@ -958,7 +978,11 @@ public static class StorageTools
 
                 try
                 {
-                    var content = await file.ReadTextAsync(CancellationToken.None);
+                    var fileSem2 = _fileAccessSemaphores.GetOrAdd(file.Id, _ => new SemaphoreSlim(1, 1));
+                    await fileSem2.WaitAsync(CancellationToken.None);
+                    string content;
+                    try { content = await file.ReadTextAsync(CancellationToken.None); }
+                    finally { fileSem2.Release(); }
                     if (sizeBytes == null)
                         sizeBytes = Encoding.UTF8.GetByteCount(content);
                     lineCount = content.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None).Length;
