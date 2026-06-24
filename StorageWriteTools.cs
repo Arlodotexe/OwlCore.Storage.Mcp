@@ -99,7 +99,6 @@ public static partial class StorageWriteTools
             {
                 newFile = await modifiableFolder.CreateFileAsync(fileName, overwrite);
             }
-
             string newFileId = ProtocolRegistry.IsCustomProtocol(parentFolderId) ? StorageTools.CreateCustomItemId(parentFolderId, fileName) : newFile.Id;
             _storableRegistry[newFileId] = newFile;
 
@@ -113,6 +112,10 @@ public static partial class StorageWriteTools
         catch (McpException)
         {
             throw; // Re-throw MCP exceptions as-is
+        }
+        catch (FileNotFoundException ex)
+        {
+            throw new McpException(ex.Message, ex, McpErrorCode.InvalidParams);
         }
         catch (Exception ex)
         {
