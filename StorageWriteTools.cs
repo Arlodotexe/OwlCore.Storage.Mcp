@@ -54,7 +54,7 @@ public static partial class StorageWriteTools
         }
     }
 
-    [Description("Creates a new file in the specified parent folder by ID or path.")]
+    [Description("Creates a new file in the specified parent folder by ID or path. Content writes MUST be a second write_file_text or write_file_text_ranged tool call after creation.")]
     public static async Task<StorableItemWithArchiveTypeResult> CreateFile(string parentFolderId, string fileName, bool overwrite = false)
     {
         var cancellationToken = CancellationToken.None;
