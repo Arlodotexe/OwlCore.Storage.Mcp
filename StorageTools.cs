@@ -19,7 +19,7 @@ public static class StorageTools
     private static readonly SemaphoreSlim _initializationSemaphore = new(1, 1);
     // Semaphores are never pruned; entries accumulate for every distinct file.Id ever accessed.
     internal static readonly ConcurrentDictionary<string, SemaphoreSlim> _fileAccessSemaphores = new();
-    
+
     /// <summary>
     /// Ensures folder IDs consistently end with a trailing slash.
     /// File IDs are returned unchanged.
@@ -43,7 +43,7 @@ public static class StorageTools
             return StoragePathNormalizer.NormalizeExternalId(id);
         return id; // leave non-browsable protocols unchanged (trailing slash may be semantic)
     }
-    
+
     static StorageTools()
     {
         // Don't do async work in static constructor - just ensure basic setup
@@ -63,7 +63,7 @@ public static class StorageTools
 
             // Initialize ProtocolRegistry and restore mounts
             await ProtocolRegistry.EnsureInitializedAsync(cancellationToken);
-            
+
             // Pre-register common protocol roots after mount restoration
             foreach (var protocolScheme in ProtocolRegistry.GetRegisteredProtocols())
             {
@@ -100,7 +100,7 @@ public static class StorageTools
         // Ensure the storage system is fully initialized first
         await EnsureInitializedAsync(cancellationToken);
 
-    // Issue003: early canonicalization (memory://foo/ -> memory://foo, preserving roots) for identity + symmetric errors.
+        // Issue003: early canonicalization (memory://foo/ -> memory://foo, preserving roots) for identity + symmetric errors.
         var originalId = id;
         var normalizedId = StoragePathNormalizer.NormalizeExternalId(originalId);
         if (normalizedId != originalId)
@@ -113,9 +113,9 @@ public static class StorageTools
             }
             id = normalizedId; // proceed using normalized id
         }
-        
+
         // Check if already registered - if so, we're done
-        if (_storableRegistry.ContainsKey(id)) 
+        if (_storableRegistry.ContainsKey(id))
         {
             Logger.LogInformation($"[STORAGE] Item already registered: {id}");
             return;
@@ -218,7 +218,7 @@ public static class StorageTools
         {
             var scheme = registrationId.Split("://")[0];
             var pathPart = registrationId.Split("://", 2)[1];
-            
+
             var knownProtocols = ProtocolRegistry.GetRegisteredProtocols();
             if (!knownProtocols.Contains(scheme))
             {
@@ -241,14 +241,14 @@ public static class StorageTools
                 {
                     var rootUri = $"{scheme}://";
                     var availableRoots = _storableRegistry.Keys.Where(k => k.EndsWith("://")).ToList();
-                    
+
                     throw new InvalidOperationException(
                         $"Cannot directly access '{registrationId}' - this ID exists but hasn't been seen at runtime yet. " +
                         $"Navigation can only start from already-loaded items. " +
                         $"Start from root '{rootUri}' and navigate to this path using GetItemByRelativePath('{rootUri}', '{pathPart}'). " +
                         $"Available roots: {string.Join(", ", availableRoots)}");
                 }
-                
+
                 // For protocols without browseable roots (direct resource protocols), 
                 // continue to the CreateResourceAsync logic below
             }
@@ -260,7 +260,7 @@ public static class StorageTools
             }
 
             Logger.LogInformation($"[STORAGE] Found protocol handler for {registrationId}: {protocolHandler.GetType().Name}");
-            
+
             try
             {
                 // Only allow registration of root URIs for protocols
@@ -319,7 +319,7 @@ public static class StorageTools
                 // Create a SystemFolder for each drive
                 var driveFolder = new SystemFolder(new DirectoryInfo(drive.RootDirectory.FullName));
                 _storableRegistry[drive.RootDirectory.FullName] = driveFolder;
-                
+
                 // Add drive info to result
                 driveInfos.Add(new DriveInfoResult(
                     Id: drive.RootDirectory.FullName,
@@ -369,7 +369,7 @@ public static class StorageTools
             {
                 var protocolHandler = ProtocolRegistry.GetProtocolHandler(rootUri);
                 if (protocolHandler == null || !protocolHandler.HasBrowsableRoot) continue;
-                
+
                 // Skip mounted folder protocols since they're already included above
                 if (protocolHandler is MountedFolderProtocolHandler) continue;
 
@@ -382,7 +382,7 @@ public static class StorageTools
                         _storableRegistry[rootUri] = protocolRoot;
                     }
                 }
-                
+
                 // Get drive information from the protocol handler
                 var driveInfo = await protocolHandler.GetDriveInfoAsync(rootUri, CancellationToken.None);
                 if (driveInfo != null)
@@ -875,6 +875,8 @@ public static class StorageTools
         }
     }
 
+    private const int ReadFileTextRangeMaxBytes = 8 * 1024; // 8 KB
+
     [Description("Reads file text from http, https, local storage, memory, ipfs, ipns, mfs, and all other supported protocols.")]
     public static async Task<string> ReadFileTextRange([Description("The ID of the file to read.")] string fileId, [Description("1-based indexing.")] int startLine, [Description("Omit this to read to end of file. Prefer including when known.")] int? endLine = null, int? columnLimit = 5000)
     {
@@ -899,12 +901,12 @@ public static class StorageTools
             string content;
             try { content = await file.ReadTextAsync(CancellationToken.None); }
             finally { fileSem.Release(); }
-            var lines = content.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
-            
+            var lines = content.Split(["\r\n", "\r", "\n"], StringSplitOptions.None);
+
             // Validate line numbers (1-based)
             if (startLine < 1 || startLine > lines.Length)
                 throw new McpException($"Invalid startLine: {startLine}. Stop blindly reading and use get_storable_info upfront for line count. Must be between 1 and {lines.Length} (file has {lines.Length} lines)", McpErrorCode.InvalidParams);
-            
+
             int actualEndLine = endLine ?? lines.Length;
             if (actualEndLine < startLine || actualEndLine > lines.Length)
                 throw new McpException($"Invalid endLine: {actualEndLine}. Must be between {startLine} and {lines.Length}. Stop blindly reading and use get_storable_info upfront for line count.", McpErrorCode.InvalidParams);
@@ -925,7 +927,27 @@ public static class StorageTools
                 }
             }
 
-            return string.Join('\n', selectedLines);
+            var result = string.Join('\n', selectedLines);
+
+            if (Encoding.UTF8.GetByteCount(result) > ReadFileTextRangeMaxBytes)
+            {
+                // Trim lines until we're under the limit
+                int keep = selectedLines.Length;
+                while (keep > 0)
+                {
+                    var trimmed = string.Join('\n', selectedLines[..keep]);
+                    if (Encoding.UTF8.GetByteCount(trimmed) <= ReadFileTextRangeMaxBytes)
+                    {
+                        var excludedLines = actualEndLine - (startLine - 1 + keep);
+                        return trimmed
+                            + $"\n\n[Output truncated to {ReadFileTextRangeMaxBytes} bytes. "
+                            + $"{excludedLines} lines excluded from requested range. Read from line {startLine + keep} to continue.]";
+                    }
+                    keep--;
+                }
+            }
+
+            return result;
         }
         catch (McpException)
         {
@@ -1152,46 +1174,46 @@ public static class StorageTools
     {
         try
         {
-        var protocols = new List<ProtocolInfoResult>();
+            var protocols = new List<ProtocolInfoResult>();
 
-        // Add built-in filesystem support
-        protocols.Add(new ProtocolInfoResult(
-            Scheme: "file",
-            Name: "Local File System",
-            Type: "filesystem",
-            HasBrowsableRoot: true,
-            SupportsDirectResources: false,
-            Description: "Local disk drives and folders"
-        ));
+            // Add built-in filesystem support
+            protocols.Add(new ProtocolInfoResult(
+                Scheme: "file",
+                Name: "Local File System",
+                Type: "filesystem",
+                HasBrowsableRoot: true,
+                SupportsDirectResources: false,
+                Description: "Local disk drives and folders"
+            ));
 
-        // Add custom protocols
-        foreach (var protocolScheme in ProtocolRegistry.GetRegisteredProtocols())
-        {
-            var rootUri = $"{protocolScheme}://";
-            var protocolHandler = ProtocolRegistry.GetProtocolHandler(rootUri);
-            
-            if (protocolHandler != null)
+            // Add custom protocols
+            foreach (var protocolScheme in ProtocolRegistry.GetRegisteredProtocols())
             {
-                protocols.Add(new ProtocolInfoResult(
-                    Scheme: protocolScheme,
-                    Name: protocolScheme.ToUpper() + " Protocol",
-                    Type: protocolHandler.HasBrowsableRoot ? "filesystem" : "resource",
-                    HasBrowsableRoot: protocolHandler.HasBrowsableRoot,
-                    SupportsDirectResources: !protocolHandler.HasBrowsableRoot,
-                    Description: protocolScheme switch
-                    {
-                        "mfs" => "IPFS Mutable File System - browsable IPFS storage",
-                        "memory" => "In-memory temporary storage for testing",
-                        "http" or "https" => "HTTP/HTTPS web resources and files",
-                        "ipfs" => "IPFS content addressed by hash - files or folders accessible by hash",
-                        "ipns" => "IPNS names that resolve to IPFS content - files or folders accessible by name",
-                        _ => $"Custom {protocolScheme} protocol"
-                    }
-                ));
-            }
-        }
+                var rootUri = $"{protocolScheme}://";
+                var protocolHandler = ProtocolRegistry.GetProtocolHandler(rootUri);
 
-        return protocols.ToArray();
+                if (protocolHandler != null)
+                {
+                    protocols.Add(new ProtocolInfoResult(
+                        Scheme: protocolScheme,
+                        Name: protocolScheme.ToUpper() + " Protocol",
+                        Type: protocolHandler.HasBrowsableRoot ? "filesystem" : "resource",
+                        HasBrowsableRoot: protocolHandler.HasBrowsableRoot,
+                        SupportsDirectResources: !protocolHandler.HasBrowsableRoot,
+                        Description: protocolScheme switch
+                        {
+                            "mfs" => "IPFS Mutable File System - browsable IPFS storage",
+                            "memory" => "In-memory temporary storage for testing",
+                            "http" or "https" => "HTTP/HTTPS web resources and files",
+                            "ipfs" => "IPFS content addressed by hash - files or folders accessible by hash",
+                            "ipns" => "IPNS names that resolve to IPFS content - files or folders accessible by name",
+                            _ => $"Custom {protocolScheme} protocol"
+                        }
+                    ));
+                }
+            }
+
+            return protocols.ToArray();
         }
         catch (McpException) { throw; }
         catch (Exception ex)
@@ -1267,20 +1289,20 @@ public static class StorageTools
                 throw new McpException("Protocol scheme cannot be null or empty", McpErrorCode.InvalidParams);
 
             var wasUnmounted = await ProtocolRegistry.UnmountFolder(protocolScheme);
-            
+
             if (wasUnmounted)
             {
                 // Remove from storable registry as well
                 var rootUri = $"{protocolScheme}://";
                 _storableRegistry.TryRemove(rootUri, out _);
-                
+
                 // Save the mount settings to persist the change
                 var mountSettings = ProtocolRegistry.GetMountSettings();
                 if (mountSettings != null)
                 {
                     await mountSettings.SaveAsync();
                 }
-                
+
                 return new UnmountResult(
                     Success: true,
                     ProtocolScheme: protocolScheme,
@@ -1311,9 +1333,9 @@ public static class StorageTools
     {
         try
         {
-        var cancellationToken = CancellationToken.None;
-        await ProtocolRegistry.EnsureInitializedAsync(cancellationToken);
-        return ProtocolRegistry.GetMountedFolders();
+            var cancellationToken = CancellationToken.None;
+            await ProtocolRegistry.EnsureInitializedAsync(cancellationToken);
+            return ProtocolRegistry.GetMountedFolders();
         }
         catch (McpException) { throw; }
         catch (Exception ex)
@@ -1335,7 +1357,7 @@ public static class StorageTools
                 throw new McpException("Current protocol scheme cannot be null or empty", McpErrorCode.InvalidParams);
 
             var newRootUri = ProtocolRegistry.RenameMountedFolder(currentProtocolScheme, newProtocolScheme, newMountName);
-            
+
             // Update storable registry if protocol scheme changed
             if (!string.IsNullOrEmpty(newProtocolScheme) && newProtocolScheme != currentProtocolScheme)
             {
@@ -1345,14 +1367,14 @@ public static class StorageTools
                     _storableRegistry[newRootUri] = folder;
                 }
             }
-            
+
             // Save the mount settings to persist the change
             var mountSettings = ProtocolRegistry.GetMountSettings();
             if (mountSettings != null)
             {
                 await mountSettings.SaveAsync();
             }
-            
+
             return new RenameMountResult(
                 Success: true,
                 OldProtocolScheme: currentProtocolScheme,
