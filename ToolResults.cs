@@ -11,7 +11,7 @@ public record PaginatedItemsResult(StorableItemResult[] Items, int TotalCount, b
 
 public record DriveInfoResult(string Id, string Name, string Type, string DriveType, bool IsReady, long TotalSize, long AvailableFreeSpace);
 
-public record StorableInfoResult(string Id, string Name, string Type, long? SizeBytes, int? LineCount);
+public record StorableInfoResult(string Id, string Name, string Type, long? SizeBytes, int? LineCount, DateTime? LastModifiedAt, DateTime? LastAccessedAt, DateTime? CreatedAt);
 
 public record ProtocolInfoResult(string Scheme, string Name, string Type, bool HasBrowsableRoot, bool SupportsDirectResources, string Description);
 

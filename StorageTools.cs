@@ -993,12 +993,16 @@ public static class StorageTools
                 }
             }
 
+
             return new StorableInfoResult(
                 Id: storable.Id,
                 Name: storable.Name,
                 Type: typeStr,
                 SizeBytes: sizeBytes,
-                LineCount: lineCount
+                LineCount: lineCount,
+                LastModifiedAt: storable is ILastModifiedAt lastModifiedAt ? await lastModifiedAt.LastModifiedAt.GetValueAsync(cancellationToken) : null,
+                LastAccessedAt: storable is ILastAccessedAt lastAccessedAt ? await lastAccessedAt.LastAccessedAt.GetValueAsync(cancellationToken) : null,
+                CreatedAt: storable is ICreatedAt createdAt ? await createdAt.CreatedAt.GetValueAsync(cancellationToken) : null
             );
         }
         catch (McpException)
