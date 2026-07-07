@@ -1143,7 +1143,7 @@ public static class StorageTools
         }
     }
 
-    [Description("Lists all supported storage protocols and their capabilities (mfs, memory, http, ipfs, ipns, custom, etc.).")]
+    [Description("Lists all supported storage protocols and their capabilities (mfs, memory, http, ipfs, ipns, custom mounted ID aliases, etc.). Use these `scheme://` IDs as starting points for GetItemByRelativePath navigation.")]
     public static ProtocolInfoResult[] GetSupportedProtocols()
     {
         try
