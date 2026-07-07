@@ -1302,7 +1302,7 @@ public static class StorageTools
         }
     }
 
-    [Description("Lists all currently mounted folders and their information.")]
+    [Description("Lists all currently mounted folders and their information. Mounted folder schemas are aliases to other folder IDs, or file IDs in the case of archive folders.")]
     public static async Task<MountedFolderInfo[]> GetMountedFolders()
     {
         try
