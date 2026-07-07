@@ -937,7 +937,7 @@ public static class StorageTools
         }
     }
 
-    [Description("Gets information about a seen storable item by its ID, including custom mount aliases. MUST use before any ranged read/write tool calls.")]
+    [Description("Gets information about a seen storable item by its ID, including custom mount aliases. MUST use before any ranged read/write tool calls. Supplies ID, name, storage type, size in bytes, line count, and datetime property metadata.")]
     public static async Task<StorableInfoResult?> GetStorableInfo(string id)
     {
         var cancellationToken = CancellationToken.None;
