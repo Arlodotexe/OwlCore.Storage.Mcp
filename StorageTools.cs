@@ -875,7 +875,7 @@ public static class StorageTools
         }
     }
 
-    private const int ReadFileTextRangeMaxBytes = 8 * 1024; // 8 KB
+    private const int ReadFileTextRangeMaxBytes = 8 * 1024 - 192; // 8 KB minus overhead for truncation message
 
     [Description("Reads file text from http, https, local storage, memory, ipfs, ipns, mfs, and all other supported protocols. Max 8KB reads per call, tool result tells you where to resume if truncated.")]
     public static async Task<string> ReadFileTextRange([Description("The ID of the file to read.")] string fileId, [Description("1-based indexing.")] int startLine, [Description("Omit this to read to end of file. Prefer including when known.")] int? endLine = null, int? columnLimit = ReadFileTextRangeMaxBytes, [Description("Set true to prefix each line content with its exact line number as [LX]")] bool prefixLineNumbers = false)
