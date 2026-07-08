@@ -878,7 +878,7 @@ public static class StorageTools
     private const int ReadFileTextRangeMaxBytes = 8 * 1024; // 8 KB
 
     [Description("Reads file text from http, https, local storage, memory, ipfs, ipns, mfs, and all other supported protocols. Max 8KB reads per call, tool result tells you where to resume if truncated.")]
-    public static async Task<string> ReadFileTextRange([Description("The ID of the file to read.")] string fileId, [Description("1-based indexing.")] int startLine, [Description("Omit this to read to end of file. Prefer including when known.")] int? endLine = null, int? columnLimit = 5000)
+    public static async Task<string> ReadFileTextRange([Description("The ID of the file to read.")] string fileId, [Description("1-based indexing.")] int startLine, [Description("Omit this to read to end of file. Prefer including when known.")] int? endLine = null, int? columnLimit = ReadFileTextRangeMaxBytes, [Description("Set true to prefix each line content with its exact line number as [LX]")] bool prefixLineNumbers = false)
     {
         var cancellationToken = CancellationToken.None;
         try
@@ -913,6 +913,16 @@ public static class StorageTools
 
             // Extract the requested range (convert to 0-based indexing)
             var selectedLines = lines[(startLine - 1)..actualEndLine];
+
+            // Prefix line numbers if requested
+            if (prefixLineNumbers)
+            {
+                for (int i = 0; i < selectedLines.Length; i++)
+                {
+                    int lineNumber = startLine + i;
+                    selectedLines[i] = $"[L{lineNumber}]{selectedLines[i]}";
+                }
+            }
 
             // Apply per-line column limit if specified
             if (columnLimit is int maxCols)
