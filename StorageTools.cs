@@ -877,7 +877,7 @@ public static class StorageTools
 
     private const int ReadFileTextRangeMaxBytes = 8 * 1024; // 8 KB
 
-    [Description("Reads file text from http, https, local storage, memory, ipfs, ipns, mfs, and all other supported protocols.")]
+    [Description("Reads file text from http, https, local storage, memory, ipfs, ipns, mfs, and all other supported protocols. Max 8KB reads per call, tool result tells you where to resume if truncated.")]
     public static async Task<string> ReadFileTextRange([Description("The ID of the file to read.")] string fileId, [Description("1-based indexing.")] int startLine, [Description("Omit this to read to end of file. Prefer including when known.")] int? endLine = null, int? columnLimit = 5000)
     {
         var cancellationToken = CancellationToken.None;
@@ -941,7 +941,7 @@ public static class StorageTools
                         var excludedLines = actualEndLine - (startLine - 1 + keep);
                         return trimmed
                             + $"\n\n[Output truncated to {ReadFileTextRangeMaxBytes} bytes. "
-                            + $"{excludedLines} lines excluded from requested range. Read from line {startLine + keep} to continue.]";
+                            + $"{excludedLines} lines excluded from requested range. Read from startLine {startLine + keep} to continue.]";
                     }
                     keep--;
                 }
