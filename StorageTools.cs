@@ -1338,7 +1338,7 @@ public static class StorageTools
         }
     }
 
-    [Description("Lists all currently mounted folders and their information. Mounted folder `protocolScheme://`s are IDs that act as direct alias substitutes for other folder IDs, or file IDs in the case of archive folders. Use these mount `protocolScheme://` IDs as starting points for GetItemByRelativePath navigation.")]
+    [Description("Lists all currently mounted folders and their information. Mounted folder `protocolScheme://`s are standalone IDs and are direct alias substitutes for other folder IDs (or file IDs in the case of archive folders). Use these mount `protocolScheme://` IDs as starting points for GetItemByRelativePath navigation.")]
     public static async Task<MountedFolderInfo[]> GetMountedFolders()
     {
         try
