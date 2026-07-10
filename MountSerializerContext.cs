@@ -20,6 +20,7 @@ namespace OwlCore.Storage.Mcp;
 [JsonSerializable(typeof(DriveInfoResult))]
 [JsonSerializable(typeof(DriveInfoResult[]))]
 [JsonSerializable(typeof(StorableInfoResult))]
+[JsonSerializable(typeof(StorableInfoResult[]))]
 [JsonSerializable(typeof(ProtocolInfoResult))]
 [JsonSerializable(typeof(ProtocolInfoResult[]))]
 [JsonSerializable(typeof(MountResult))]

@@ -969,82 +969,88 @@ public static class StorageTools
         }
     }
 
-    [Description("Gets information about a seen storable item by its ID, including custom mount aliases. Recommended for precise ranged read/write windows or for incremental/re-reads to discern updates or appends. Supplies ID, name, storage type, size in bytes, line count, and datetime property metadata.")]
-    public static async Task<StorableInfoResult?> GetStorableInfo(string id)
+    [Description("Gets information about seen storable items by its ID, including custom mount aliases. Recommended for precise ranged read/write windows or for incremental/re-reads to discern updates or appends. Yields ID, name, storage type, size in bytes, line count, and datetime property metadata.")]
+    public static async Task<StorableInfoResult[]> GetStorableInfo(string[] ids)
     {
-        var cancellationToken = CancellationToken.None;
-        try
+        var results = new List<StorableInfoResult>();
+        foreach (var id in ids)
         {
-            await EnsureStorableRegistered(id, cancellationToken);
-
-            if (!_storableRegistry.TryGetValue(id, out var storable))
-                throw new McpException($"Item with ID '{id}' not found", McpErrorCode.InvalidParams);
-
-            var typeStr = storable switch
+            var cancellationToken = CancellationToken.None;
+            try
             {
-                IFile => "file",
-                IFolder => "folder",
-                _ => "unknown"
-            };
+                await EnsureStorableRegistered(id, cancellationToken);
 
-            // For files, get size (always) and line count (text only)
-            long? sizeBytes = null;
-            int? lineCount = null;
-            if (storable is IFile file)
-            {
-                try
+                if (!_storableRegistry.TryGetValue(id, out var storable))
+                    throw new McpException($"Item with ID '{id}' not found", McpErrorCode.InvalidParams);
+
+                var typeStr = storable switch
                 {
-                    var fileSem1 = _fileAccessSemaphores.GetOrAdd(file.Id, _ => new SemaphoreSlim(1, 1));
-                    await fileSem1.WaitAsync(CancellationToken.None);
+                    IFile => "file",
+                    IFolder => "folder",
+                    _ => "unknown"
+                };
+
+                // For files, get size (always) and line count (text only)
+                long? sizeBytes = null;
+                int? lineCount = null;
+                if (storable is IFile file)
+                {
                     try
                     {
-                        using var stream = await file.OpenStreamAsync(FileAccess.Read, CancellationToken.None);
-                        sizeBytes = stream.Length;
+                        var fileSem1 = _fileAccessSemaphores.GetOrAdd(file.Id, _ => new SemaphoreSlim(1, 1));
+                        await fileSem1.WaitAsync(CancellationToken.None);
+                        try
+                        {
+                            using var stream = await file.OpenStreamAsync(FileAccess.Read, CancellationToken.None);
+                            sizeBytes = stream.Length;
+                        }
+                        finally { fileSem1.Release(); }
                     }
-                    finally { fileSem1.Release(); }
-                }
-                catch
-                {
-                    // Stream not available or not seekable
+                    catch
+                    {
+                        // Stream not available or not seekable
+                    }
+
+                    try
+                    {
+                        var fileSem2 = _fileAccessSemaphores.GetOrAdd(file.Id, _ => new SemaphoreSlim(1, 1));
+                        await fileSem2.WaitAsync(CancellationToken.None);
+                        string content;
+                        try { content = await file.ReadTextAsync(CancellationToken.None); }
+                        finally { fileSem2.Release(); }
+                        if (sizeBytes == null)
+                            sizeBytes = Encoding.UTF8.GetByteCount(content);
+                        lineCount = content.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None).Length;
+                    }
+                    catch
+                    {
+                        // Not a text file or unreadable — lineCount stays null
+                    }
                 }
 
-                try
-                {
-                    var fileSem2 = _fileAccessSemaphores.GetOrAdd(file.Id, _ => new SemaphoreSlim(1, 1));
-                    await fileSem2.WaitAsync(CancellationToken.None);
-                    string content;
-                    try { content = await file.ReadTextAsync(CancellationToken.None); }
-                    finally { fileSem2.Release(); }
-                    if (sizeBytes == null)
-                        sizeBytes = Encoding.UTF8.GetByteCount(content);
-                    lineCount = content.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None).Length;
-                }
-                catch
-                {
-                    // Not a text file or unreadable — lineCount stays null
-                }
+
+                results.Add(new StorableInfoResult(
+                    Id: storable.Id,
+                    Name: storable.Name,
+                    Type: typeStr,
+                    SizeBytes: sizeBytes,
+                    LineCount: lineCount,
+                    LastModifiedAt: storable is ILastModifiedAt lastModifiedAt ? await lastModifiedAt.LastModifiedAt.GetValueAsync(cancellationToken) : null,
+                    LastAccessedAt: storable is ILastAccessedAt lastAccessedAt ? await lastAccessedAt.LastAccessedAt.GetValueAsync(cancellationToken) : null,
+                    CreatedAt: storable is ICreatedAt createdAt ? await createdAt.CreatedAt.GetValueAsync(cancellationToken) : null
+                ));
             }
+            catch (McpException)
+            {
+                throw; // Re-throw MCP exceptions as-is
+            }
+            catch (Exception ex)
+            {
+                throw new McpException($"Failed to get storable info for '{id}': {ex.Message}", ex, McpErrorCode.InternalError);
+            }
+        }
 
-
-            return new StorableInfoResult(
-                Id: storable.Id,
-                Name: storable.Name,
-                Type: typeStr,
-                SizeBytes: sizeBytes,
-                LineCount: lineCount,
-                LastModifiedAt: storable is ILastModifiedAt lastModifiedAt ? await lastModifiedAt.LastModifiedAt.GetValueAsync(cancellationToken) : null,
-                LastAccessedAt: storable is ILastAccessedAt lastAccessedAt ? await lastAccessedAt.LastAccessedAt.GetValueAsync(cancellationToken) : null,
-                CreatedAt: storable is ICreatedAt createdAt ? await createdAt.CreatedAt.GetValueAsync(cancellationToken) : null
-            );
-        }
-        catch (McpException)
-        {
-            throw; // Re-throw MCP exceptions as-is
-        }
-        catch (Exception ex)
-        {
-            throw new McpException($"Failed to get storable info for '{id}': {ex.Message}", ex, McpErrorCode.InternalError);
-        }
+        return results.ToArray();
     }
 
     [Description("Gets the root folder of a given storage item id.")]
