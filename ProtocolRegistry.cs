@@ -566,7 +566,7 @@ public static class ProtocolRegistry
         }
 
         Logger.LogInformation($"Target config found: ProtocolScheme={targetConfig.ProtocolScheme}, OriginalStorableId={targetConfig.OriginalStorableId}");
-        MountSettings.Mounts.Remove(targetConfig);
+        MountSettings.RemoveMount(targetConfig.ProtocolScheme);
 
         return true;
     }

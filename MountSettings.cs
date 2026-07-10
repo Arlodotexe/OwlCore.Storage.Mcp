@@ -99,6 +99,17 @@ public class MountSettings : SettingsBase
     }
 
     /// <summary>
+    /// Removes a mount configuration by protocol scheme and persists the change.
+    /// </summary>
+    public void RemoveMount(string protocolScheme)
+    {
+        var mounts = Mounts;
+        int removed = mounts.RemoveAll(m => m.ProtocolScheme == protocolScheme);
+        if (removed > 0)
+            Mounts = mounts; // persist via setter
+    }
+
+    /// <summary>
     /// Gets mount configurations in dependency order (dependencies first)
     /// </summary>
     public List<MountConfiguration> GetMountsInDependencyOrder()
