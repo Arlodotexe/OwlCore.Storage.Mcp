@@ -504,8 +504,8 @@ public static class StorageTools
     [Description("Searches for files and folders by name pattern within a folder hierarchy. Uses depth-first recursive traversal. Supports glob patterns (e.g., '*.cs', 'src/**/*.json') and regex patterns.")]
     public static async Task<FindResultWithMatches[]> FindAll(
         [Description("The ID of the folder to search within.")] string folderId,
-        [Description("Glob pattern to match against item names. Use '*' for any chars, '?' for single char, '**/' for recursive directory match. Examples: '*.cs', 'test_*', '**/*.json'.")] string? nameGlob = null,
-        [Description("Regex pattern to search within file contents. Only files are content-searched. Matched lines are returned with line numbers.")] string? contentRegex = null,
+        [Description($"Glob pattern to match against item names. Use '*' for any chars, '?' for single char, '**/' for recursive directory match. Examples: '*.cs', 'test_*', '**/*.json'. Optional, searches all files recursively if excluded. Either this, {nameof(fileContentRegex)}, or both must be included.")] string? nameOrPathGlob = null,
+        [Description($"Regex pattern to search within file contents. Only files are content-searched. Matched lines are returned with line numbers. Optional, doesn't surface content if excluded. Either this, {nameof(nameOrPathGlob)} or both must be included.")] string? fileContentRegex = null,
         [Description("What to search for: 'all' (default), 'file', or 'folder'.")] string itemType = "all",
         [Description("Maximum number of results to return. Default 100.")] int maxResults = 100)
     {
@@ -514,8 +514,8 @@ public static class StorageTools
         {
             if (string.IsNullOrWhiteSpace(folderId))
                 throw new McpException("Folder ID cannot be empty", McpErrorCode.InvalidParams);
-            if (string.IsNullOrWhiteSpace(nameGlob) && string.IsNullOrWhiteSpace(contentRegex))
-                throw new McpException("At least one of 'nameGlob' or 'contentRegex' must be provided.", McpErrorCode.InvalidParams);
+            if (string.IsNullOrWhiteSpace(nameOrPathGlob) && string.IsNullOrWhiteSpace(fileContentRegex))
+                throw new McpException("At least one of 'nameOrPathGlob' or 'fileContentRegex' must be provided.", McpErrorCode.InvalidParams);
             if (maxResults <= 0)
                 throw new McpException("maxResults must be a positive integer", McpErrorCode.InvalidParams);
 
@@ -527,29 +527,29 @@ public static class StorageTools
 
             // Build name glob regex
             Regex? nameRegex = null;
-            if (!string.IsNullOrWhiteSpace(nameGlob))
+            if (!string.IsNullOrWhiteSpace(nameOrPathGlob))
             {
                 try
                 {
-                    nameRegex = new Regex(GlobToRegex(nameGlob), RegexOptions.IgnoreCase | RegexOptions.Compiled);
+                    nameRegex = new Regex(GlobToRegex(nameOrPathGlob), RegexOptions.IgnoreCase | RegexOptions.Compiled);
                 }
                 catch (ArgumentException ex)
                 {
-                    throw new McpException($"Invalid glob pattern '{nameGlob}': {ex.Message}", McpErrorCode.InvalidParams);
+                    throw new McpException($"Invalid glob pattern '{nameOrPathGlob}': {ex.Message}", McpErrorCode.InvalidParams);
                 }
             }
 
             // Build content regex
-            Regex? contentRegexCompiled = null;
-            if (!string.IsNullOrWhiteSpace(contentRegex))
+            Regex? fileContentRegexCompiled = null;
+            if (!string.IsNullOrWhiteSpace(fileContentRegex))
             {
                 try
                 {
-                    contentRegexCompiled = new Regex(contentRegex, RegexOptions.IgnoreCase | RegexOptions.Compiled);
+                    fileContentRegexCompiled = new Regex(fileContentRegex, RegexOptions.IgnoreCase | RegexOptions.Compiled);
                 }
                 catch (ArgumentException ex)
                 {
-                    throw new McpException($"Invalid content regex '{contentRegex}': {ex.Message}", McpErrorCode.InvalidParams);
+                    throw new McpException($"Invalid content regex '{fileContentRegex}': {ex.Message}", McpErrorCode.InvalidParams);
                 }
             }
 
@@ -589,7 +589,7 @@ public static class StorageTools
                 };
 
                 // Content filter (files only)
-                if (contentRegexCompiled != null && item is IFile file)
+                if (fileContentRegexCompiled != null && item is IFile file)
                 {
                     try
                     {
@@ -603,7 +603,7 @@ public static class StorageTools
 
                         for (int i = 0; i < lines2.Length; i++)
                         {
-                            if (contentRegexCompiled.IsMatch(lines2[i]))
+                            if (fileContentRegexCompiled.IsMatch(lines2[i]))
                                 matches.Add(new ContentMatchLine(Line: i + 1, Text: lines2[i].TrimEnd()));
                         }
 
@@ -617,7 +617,7 @@ public static class StorageTools
                         continue; // Skip files that can't be read as text
                     }
                 }
-                else if (contentRegexCompiled != null && item is not IFile)
+                else if (fileContentRegexCompiled != null && item is not IFile)
                 {
                     continue; // Content search requested but item is a folder
                 }
