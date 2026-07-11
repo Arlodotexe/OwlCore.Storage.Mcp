@@ -975,7 +975,7 @@ public static class StorageTools
     }
 
     [Description("Gets information about seen storable items by its ID, including custom mount aliases. Recommended for precise ranged read/write windows or for incremental/re-reads to discern updates or appends. Yields ID, name, storage type, size in bytes, line count, and datetime property metadata.")]
-    public static async Task<StorableInfoResult[]> GetStorableInfo(string[] ids)
+    public static async Task<StorableInfoResult[]> GetStorableInfos(string[] ids)
     {
         var results = new List<StorableInfoResult>();
         foreach (var id in ids)
