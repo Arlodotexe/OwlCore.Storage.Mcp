@@ -9,6 +9,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Ipfs.Http;
 using CommunityToolkit.Diagnostics;
+using OwlCore.Extensions;
 
 namespace OwlCore.Storage.Mcp;
 
@@ -45,7 +46,7 @@ public static class StorageTools
         {
             id = id.Replace('\\', '/');
         }
-        
+
         return id;
     }
 
@@ -524,11 +525,11 @@ public static class StorageTools
     }
 
 
-    [Description("Searches for files and folders by name pattern within a folder hierarchy. Uses depth-first recursive traversal. Supports glob patterns (e.g., '*.cs', 'src/**/*.json') and regex patterns.")]
+    [Description("Searches for files and folders by name patterns within a folder hierarchy. Uses depth-first recursive traversal. Supports glob patterns (e.g., '*.cs', 'src/**/*.json') for file/folder names and regex patterns for file content.")]
     public static async Task<FindResultWithMatches[]> FindAll(
         [Description("The ID of the folder to search within.")] string folderId,
-        [Description($"Glob pattern to match against each single storable file/folder's name along a path (NOT full path itself), use '*' to match any or no chars, '?' for single char, or '**' for recursive directory match. Examples: '*.cs', 'test*', '**/*.json', '*foldername*'. Optional param, searches all storables recursively if excluded. Either this, {nameof(fileContentRegex)}, or both must be included and non-empty.")] string? nameGlob = null,
-        [Description($"Regex pattern to search within file contents. Only files are content-searched. Matched lines are returned with line numbers. Optional param, surfaces storables but not content if excluded. Either this, {nameof(nameGlob)} or both must be included and non-empty.")] string? fileContentRegex = null,
+        [Description($"Glob patterns to match against each single storable file/folder's name along a path (NOT full path itself), use '*' to match any or no chars, '?' for single char, or '**' for recursive directory match. Examples: '*.cs', 'test*', '**/*.json', '*foldername*'. Optional param, searches all storables recursively if excluded. Either this, {nameof(fileContentRegex)}, or both must be included and non-empty.")] string[]? nameGlobs = null,
+        [Description($"Regex pattern to search within file contents. Only files are content-searched. Matched lines are returned with line numbers. Optional param, surfaces storables but not content if excluded. Either this, {nameof(nameGlobs)} or both must be included and non-empty.")] string? fileContentRegex = null,
         [Description("What to filter for glob and regex matches: 'all' (default), 'file', or 'folder'. ")] string storableTypeToMatch = "all",
         [Description("Maximum number of results to return. Default 100.")] int maxResults = 100)
     {
@@ -537,15 +538,15 @@ public static class StorageTools
         {
             if (string.IsNullOrWhiteSpace(folderId))
                 throw new McpException("Folder ID cannot be empty", McpErrorCode.InvalidParams);
-            if (string.IsNullOrWhiteSpace(nameGlob) && string.IsNullOrWhiteSpace(fileContentRegex))
+
+            if (nameGlobs is not null && nameGlobs.Any(string.IsNullOrWhiteSpace) && string.IsNullOrWhiteSpace(fileContentRegex))
                 throw new McpException("At least one of 'nameOrPathGlob' or 'fileContentRegex' must be provided.", McpErrorCode.InvalidParams);
+
             if (maxResults <= 0)
                 throw new McpException("maxResults must be a positive integer", McpErrorCode.InvalidParams);
 
-            if (fileContentRegex is not null && string.IsNullOrWhiteSpace(fileContentRegex) && !string.IsNullOrWhiteSpace(nameGlob))
-            {
-                throw new McpException("Empty regex cannot be used to find text or glob for files. Either include regex or exclude the parameter altogether.");
-            }
+            if (fileContentRegex is not null && string.IsNullOrWhiteSpace(fileContentRegex))
+                throw new McpException($"Empty regex cannot be used to find text or glob for files. Either include regex or exclude the {nameof(fileContentRegex)} parameter altogether.");
 
             folderId = NormalizeInboundExternalId(folderId);
             await EnsureStorableRegistered(folderId, cancellationToken);
@@ -554,17 +555,19 @@ public static class StorageTools
                 throw new McpException($"Folder with ID '{folderId}' not found", McpErrorCode.InvalidParams);
 
             // Build name glob regex
-            Regex? nameRegex = null;
-            if (!string.IsNullOrWhiteSpace(nameGlob))
+            List<Regex> nameRegexes = new();
+            if (nameGlobs is not null && !nameGlobs.Any(string.IsNullOrWhiteSpace))
             {
-                try
-                {
-                    nameRegex = new Regex(GlobToRegex(nameGlob), RegexOptions.IgnoreCase | RegexOptions.Compiled);
-                }
-                catch (ArgumentException ex)
-                {
-                    throw new McpException($"Invalid glob pattern '{nameGlob}': {ex.Message}", McpErrorCode.InvalidParams);
-                }
+                foreach (var nameGlob in nameGlobs.PruneNull())
+                    try
+                    {
+                        var regex = new Regex(GlobToRegex(nameGlob), RegexOptions.IgnoreCase | RegexOptions.Compiled);
+                        nameRegexes.Add(regex);
+                    }
+                    catch (ArgumentException ex)
+                    {
+                        throw new McpException($"Invalid glob pattern '{nameGlob}': {ex.Message}", McpErrorCode.InvalidParams);
+                    }
             }
 
             // Build content regex
@@ -595,10 +598,6 @@ public static class StorageTools
 
             await foreach (var item in recursive.GetItemsAsync(storableType, cancellationToken))
             {
-                // Name filter
-                if (nameRegex != null && !nameRegex.IsMatch(item.Name))
-                    continue;
-
                 // Register the item using its real ID — unlike flat folder listings,
                 // recursive results may be many levels deep, so we can't assume parentId == folderId.
                 _storableRegistry[item.Id] = item;
@@ -606,6 +605,21 @@ public static class StorageTools
 
                 string externalId = ProtocolRegistry.SubstituteWithMountAlias(item.Id);
                 await EnsureStorableRegistered(externalId, cancellationToken);
+
+                // Name filter
+                var skipIterationNoGlob = true;
+                foreach (var nameRegex in nameRegexes)
+                {
+                    // Only process storable if any provided nameGlobs match
+                    if (nameRegex.IsMatch(item.Name))
+                    {
+                        skipIterationNoGlob = false;
+                        break;
+                    }
+                }
+
+                if (skipIterationNoGlob)
+                    continue;
 
                 var typeStr = item switch
                 {
