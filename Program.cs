@@ -173,7 +173,7 @@ public static class EchoTool
 public static class TimeTool
 {
     [Description("Gets the current date and time.")]
-    public static string GetCurrentTime() => DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+    public static string GetCurrentTime() => $"{DateTime.Now:D} {DateTime.Now:G}";
 }
 
 // [McpServerToolType]
