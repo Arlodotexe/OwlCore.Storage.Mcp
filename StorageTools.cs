@@ -20,6 +20,13 @@ public static class StorageTools
     // Semaphores are never pruned; entries accumulate for every distinct file.Id ever accessed.
     internal static readonly ConcurrentDictionary<string, SemaphoreSlim> _fileAccessSemaphores = new();
 
+    internal static string NormalizeOutboundAliasId(string id, IStorable item)
+    {
+        id = EnsureFolderTrailingSlash(id, item);
+        id = NormalizeForwardSlashes(id, item);
+        return id;
+    }
+
     /// <summary>
     /// Ensures folder IDs consistently end with a trailing slash.
     /// File IDs are returned unchanged.
@@ -28,19 +35,35 @@ public static class StorageTools
     {
         if (item is IFolder && !id.EndsWith("/"))
             return id + "/";
+
+        return id;
+    }
+
+    internal static string NormalizeForwardSlashes(string id, IStorable item)
+    {
+        while (item is IFolder && id.Contains("\\"))
+        {
+            id = id.Replace('\\', '/');
+        }
+        
         return id;
     }
 
     // Issue003: inbound canonicalization for browsable protocols only (filesystem-like); resource protocols keep original form.
     private static string NormalizeInboundExternalId(string id)
     {
-        if (string.IsNullOrWhiteSpace(id)) return id;
+        if (string.IsNullOrWhiteSpace(id))
+            return id;
+
         var sep = id.IndexOf("://", StringComparison.Ordinal);
-        if (sep <= 0) return id; // not a scheme-form ID
+        if (sep <= 0)
+            return id; // not a scheme-form ID
+
         var scheme = id.Substring(0, sep);
         var handler = ProtocolRegistry.GetProtocolHandler($"{scheme}://");
         if (handler?.HasBrowsableRoot == true)
             return StoragePathNormalizer.NormalizeExternalId(id);
+
         return id; // leave non-browsable protocols unchanged (trailing slash may be semantic)
     }
 
@@ -157,7 +180,7 @@ public static class StorageTools
                         var aliasId = ProtocolRegistry.SubstituteWithMountAlias(node.Id);
                         if (aliasId != node.Id)
                             _storableRegistry[aliasId] = node;
-                        var normalizedAliasId = EnsureFolderTrailingSlash(aliasId, node);
+                        var normalizedAliasId = NormalizeOutboundAliasId(aliasId, node);
                         _storableRegistry[normalizedAliasId] = node;
                         lastNode = node;
                     }
@@ -431,7 +454,7 @@ public static class StorageTools
                 string externalId = ProtocolRegistry.SubstituteWithMountAlias(itemId);
                 if (externalId != itemId)
                     _storableRegistry[externalId] = item;
-                externalId = EnsureFolderTrailingSlash(externalId, item);
+                externalId = NormalizeOutboundAliasId(externalId, item);
                 _storableRegistry[externalId] = item;
 
                 if (index >= skip && collected < maxResults)
@@ -471,7 +494,7 @@ public static class StorageTools
                 // Ensure the alias also maps to the same item for external access
                 if (externalId != foundItem.Id)
                     _storableRegistry[externalId] = foundItem;
-                externalId = EnsureFolderTrailingSlash(externalId, foundItem);
+                externalId = NormalizeOutboundAliasId(externalId, foundItem);
                 _storableRegistry[externalId] = foundItem;
 
                 return new StorableItemResult(
@@ -704,7 +727,7 @@ public static class StorageTools
             if (!_storableRegistry.TryGetValue(startingItemId, out var startingItem))
             {
                 var availableDrives = await GetAvailableDrives();
-                var driveList = string.Join(", ", availableDrives.Cast<dynamic>().Select(d => $"'{d.id}'"));
+                var driveList = string.Join(", ", availableDrives.Select(d => $"'{d.Id}'"));
                 throw new McpException($"Starting item with ID '{startingItemId}' not found. For new navigation, use drive roots from GetAvailableDrives(): {driveList}", McpErrorCode.InvalidParams);
             }
 
@@ -717,7 +740,7 @@ public static class StorageTools
                 var aliasId = ProtocolRegistry.SubstituteWithMountAlias(node.Id);
                 if (aliasId != node.Id)
                     _storableRegistry[aliasId] = node;
-                var normalizedAliasId = EnsureFolderTrailingSlash(aliasId, node);
+                var normalizedAliasId = NormalizeOutboundAliasId(aliasId, node);
                 _storableRegistry[normalizedAliasId] = node;
 
                 lastItem = node;
@@ -730,7 +753,7 @@ public static class StorageTools
             var externalId = ProtocolRegistry.SubstituteWithMountAlias(targetItem.Id);
             if (externalId != targetItem.Id)
                 _storableRegistry[externalId] = targetItem;
-            externalId = EnsureFolderTrailingSlash(externalId, targetItem);
+            externalId = NormalizeOutboundAliasId(externalId, targetItem);
             _storableRegistry[externalId] = targetItem;
 
             return new StorableItemResult(
@@ -780,7 +803,7 @@ public static class StorageTools
                 var aliasId = ProtocolRegistry.SubstituteWithMountAlias(node.Id);
                 if (aliasId != node.Id)
                     _storableRegistry[aliasId] = node;
-                var normalizedAliasId = EnsureFolderTrailingSlash(aliasId, node);
+                var normalizedAliasId = NormalizeOutboundAliasId(aliasId, node);
                 _storableRegistry[normalizedAliasId] = node;
             }
 
@@ -1078,7 +1101,7 @@ public static class StorageTools
             // Ensure the alias also maps to the same item for external access
             if (externalId != rootFolder.Id)
                 _storableRegistry[externalId] = rootFolder;
-            externalId = EnsureFolderTrailingSlash(externalId, rootFolder);
+            externalId = NormalizeOutboundAliasId(externalId, rootFolder);
             _storableRegistry[externalId] = rootFolder;
 
             return new StorableItemResult(
@@ -1118,7 +1141,7 @@ public static class StorageTools
                 // Ensure the alias also maps to the same item for external access
                 if (externalId != foundItem.Id)
                     _storableRegistry[externalId] = foundItem;
-                externalId = EnsureFolderTrailingSlash(externalId, foundItem);
+                externalId = NormalizeOutboundAliasId(externalId, foundItem);
                 _storableRegistry[externalId] = foundItem;
 
                 return new StorableItemResult(
@@ -1169,7 +1192,7 @@ public static class StorageTools
             // Ensure the alias also maps to the same item for external access
             if (externalId != parentFolder.Id)
                 _storableRegistry[externalId] = parentFolder;
-            externalId = EnsureFolderTrailingSlash(externalId, parentFolder);
+            externalId = NormalizeOutboundAliasId(externalId, parentFolder);
             _storableRegistry[externalId] = parentFolder;
 
             return new StorableItemResult(
