@@ -504,9 +504,9 @@ public static class StorageTools
     [Description("Searches for files and folders by name pattern within a folder hierarchy. Uses depth-first recursive traversal. Supports glob patterns (e.g., '*.cs', 'src/**/*.json') and regex patterns.")]
     public static async Task<FindResultWithMatches[]> FindAll(
         [Description("The ID of the folder to search within.")] string folderId,
-        [Description($"Glob pattern to match against item names. Use '*' for any chars, '?' for single char, '**/' for recursive directory match. Examples: '*.cs', 'test_*', '**/*.json'. Optional, searches all files recursively if excluded. Either this, {nameof(fileContentRegex)}, or both must be included and non-empty.")] string? nameOrPathGlob = null,
-        [Description($"Regex pattern to search within file contents. Only files are content-searched. Matched lines are returned with line numbers. Optional, doesn't surface content if excluded. Either this, {nameof(nameOrPathGlob)} or both must be included and non-empty.")] string? fileContentRegex = null,
-        [Description("What to search for: 'all' (default), 'file', or 'folder'.")] string itemType = "all",
+        [Description($"Glob pattern to match against storable item names. Within a single storable file/folder name, '*' for any or no chars, '?' for single char, '**' for recursive directory match. Examples: '*.cs', 'test*', '**/*.json', '*foldername*'. Optional param, searches all storables recursively if excluded. Either this, {nameof(fileContentRegex)}, or both must be included and non-empty.")] string? nameOrPathGlob = null,
+        [Description($"Regex pattern to search within file contents. Only files are content-searched. Matched lines are returned with line numbers. Optional param, surfaces storables but not content if excluded. Either this, {nameof(nameOrPathGlob)} or both must be included and non-empty.")] string? fileContentRegex = null,
+        [Description("What to filter for glob and regex matches: 'all' (default), 'file', or 'folder'. ")] string storableTypeToMatch = "all",
         [Description("Maximum number of results to return. Default 100.")] int maxResults = 100)
     {
         var cancellationToken = CancellationToken.None;
@@ -559,12 +559,12 @@ public static class StorageTools
             }
 
             // Determine StorableType filter
-            var storableType = itemType.ToLowerInvariant() switch
+            var storableType = storableTypeToMatch.ToLowerInvariant() switch
             {
                 "all" => StorableType.All,
                 "file" => StorableType.File,
                 "folder" => StorableType.Folder,
-                _ => throw new McpException($"Invalid itemType '{itemType}'. Use 'all', 'file', or 'folder'.", McpErrorCode.InvalidParams)
+                _ => throw new McpException($"Invalid itemType '{storableTypeToMatch}'. Use 'all', 'file', or 'folder'.", McpErrorCode.InvalidParams)
             };
 
             var recursive = new DepthFirstRecursiveFolder(folder);
