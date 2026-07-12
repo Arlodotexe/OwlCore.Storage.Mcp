@@ -527,8 +527,8 @@ public static class StorageTools
     [Description("Searches for files and folders by name pattern within a folder hierarchy. Uses depth-first recursive traversal. Supports glob patterns (e.g., '*.cs', 'src/**/*.json') and regex patterns.")]
     public static async Task<FindResultWithMatches[]> FindAll(
         [Description("The ID of the folder to search within.")] string folderId,
-        [Description($"Glob pattern to match against storable item names. Within a single storable file/folder name, '*' for any or no chars, '?' for single char, '**' for recursive directory match. Examples: '*.cs', 'test*', '**/*.json', '*foldername*'. Optional param, searches all storables recursively if excluded. Either this, {nameof(fileContentRegex)}, or both must be included and non-empty.")] string? nameOrPathGlob = null,
-        [Description($"Regex pattern to search within file contents. Only files are content-searched. Matched lines are returned with line numbers. Optional param, surfaces storables but not content if excluded. Either this, {nameof(nameOrPathGlob)} or both must be included and non-empty.")] string? fileContentRegex = null,
+        [Description($"Glob pattern to match against each single storable file/folder's name along a path (NOT full path itself), use '*' to match any or no chars, '?' for single char, or '**' for recursive directory match. Examples: '*.cs', 'test*', '**/*.json', '*foldername*'. Optional param, searches all storables recursively if excluded. Either this, {nameof(fileContentRegex)}, or both must be included and non-empty.")] string? nameGlob = null,
+        [Description($"Regex pattern to search within file contents. Only files are content-searched. Matched lines are returned with line numbers. Optional param, surfaces storables but not content if excluded. Either this, {nameof(nameGlob)} or both must be included and non-empty.")] string? fileContentRegex = null,
         [Description("What to filter for glob and regex matches: 'all' (default), 'file', or 'folder'. ")] string storableTypeToMatch = "all",
         [Description("Maximum number of results to return. Default 100.")] int maxResults = 100)
     {
@@ -537,12 +537,12 @@ public static class StorageTools
         {
             if (string.IsNullOrWhiteSpace(folderId))
                 throw new McpException("Folder ID cannot be empty", McpErrorCode.InvalidParams);
-            if (string.IsNullOrWhiteSpace(nameOrPathGlob) && string.IsNullOrWhiteSpace(fileContentRegex))
+            if (string.IsNullOrWhiteSpace(nameGlob) && string.IsNullOrWhiteSpace(fileContentRegex))
                 throw new McpException("At least one of 'nameOrPathGlob' or 'fileContentRegex' must be provided.", McpErrorCode.InvalidParams);
             if (maxResults <= 0)
                 throw new McpException("maxResults must be a positive integer", McpErrorCode.InvalidParams);
 
-            if (fileContentRegex is not null && string.IsNullOrWhiteSpace(fileContentRegex) && !string.IsNullOrWhiteSpace(nameOrPathGlob))
+            if (fileContentRegex is not null && string.IsNullOrWhiteSpace(fileContentRegex) && !string.IsNullOrWhiteSpace(nameGlob))
             {
                 throw new McpException("Empty regex cannot be used to find text or glob for files. Either include regex or exclude the parameter altogether.");
             }
@@ -555,15 +555,15 @@ public static class StorageTools
 
             // Build name glob regex
             Regex? nameRegex = null;
-            if (!string.IsNullOrWhiteSpace(nameOrPathGlob))
+            if (!string.IsNullOrWhiteSpace(nameGlob))
             {
                 try
                 {
-                    nameRegex = new Regex(GlobToRegex(nameOrPathGlob), RegexOptions.IgnoreCase | RegexOptions.Compiled);
+                    nameRegex = new Regex(GlobToRegex(nameGlob), RegexOptions.IgnoreCase | RegexOptions.Compiled);
                 }
                 catch (ArgumentException ex)
                 {
-                    throw new McpException($"Invalid glob pattern '{nameOrPathGlob}': {ex.Message}", McpErrorCode.InvalidParams);
+                    throw new McpException($"Invalid glob pattern '{nameGlob}': {ex.Message}", McpErrorCode.InvalidParams);
                 }
             }
 
