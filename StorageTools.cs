@@ -734,6 +734,7 @@ public static class StorageTools
             IStorable? lastItem = null;
 
             // Register each item along the navigation chain during iteration (non-creating traversal)
+            relativePath = relativePath.Replace('\\', '/');
             await foreach (var node in startingItem.GetItemsAlongRelativePathAsync(relativePath, CancellationToken.None))
             {
                 _storableRegistry[node.Id] = node;
