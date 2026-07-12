@@ -578,13 +578,11 @@ public static class StorageTools
 
                 // Register the item using its real ID — unlike flat folder listings,
                 // recursive results may be many levels deep, so we can't assume parentId == folderId.
-                string itemId = item.Id;
-                _storableRegistry[itemId] = item;
-                string externalId = ProtocolRegistry.SubstituteWithMountAlias(itemId);
-                if (externalId != itemId)
-                    _storableRegistry[externalId] = item;
-                externalId = EnsureFolderTrailingSlash(externalId, item);
-                _storableRegistry[externalId] = item;
+                _storableRegistry[item.Id] = item;
+                await EnsureStorableRegistered(item.Id, cancellationToken);
+
+                string externalId = ProtocolRegistry.SubstituteWithMountAlias(item.Id);
+                await EnsureStorableRegistered(externalId, cancellationToken);
 
                 var typeStr = item switch
                 {
