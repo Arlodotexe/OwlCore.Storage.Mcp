@@ -723,7 +723,7 @@ public static class StorageTools
         return sb.ToString();
     }
 
-    [Description("Navigates to an item using a relative path from a starting item. Accepts both forward and backslashes.")]
+    [Description("Navigates to an item using a relative path from a starting item id or alias. Accepts both forward and backslashes.")]
     public static async Task<StorableItemResult> GetItemByRelativePath(string startingItemId, string relativePath)
     {
         var cancellationToken = CancellationToken.None;
