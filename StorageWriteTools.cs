@@ -162,12 +162,17 @@ public static partial class StorageWriteTools
     }
 
     [Description("Overwrites lines in an existing file (use create_file first if it doesn't exist). By default writes a single line at startLine; pass endLine to replace the inclusive 1-based range [startLine, endLine] which must satisfy startLine <= endLine <= line count. Strict by default: written content must have exactly as many lines as the target range preserving the file's line count unless more/less lines are explicitly allowed. A write either grows or shrinks the range, never both: use allowMoreLines=true when content has more lines than the range (grow target range via content) or allowLessLines=true when it has fewer (shrink target range via content), setting both is rejected. There is no position past the last line, appending means replacing the last line with its existing content plus the new lines via allowMoreLines, which requires knowing line count.")]
-    public static async Task<string> WriteFileTextRange(string fileId, string content, int startLine, int? endLine = null, bool allowMoreLines = false, bool allowLessLines = false)
+    public static async Task<string> WriteFileTextRange(string fileId, [Description("Supports newline literals \\n, \\r\\n and \\r")] string content, int startLine, int? endLine = null, bool allowMoreLines = false, bool allowLessLines = false)
     {
         SemaphoreSlim? fileSem = null;
         bool semAcquired = false;
         try
         {
+            string[] newLineSet = ["\r\n", "\r", "\n",];
+            content = content.Replace("\\n", "\n");
+            content = content.Replace("\\r", "\r");
+            content = content.Replace("\\r\\n", "\r\n");
+
             var cancellationToken = CancellationToken.None;
             await StorageTools.EnsureStorableRegistered(fileId, cancellationToken);
 
@@ -178,7 +183,7 @@ public static partial class StorageWriteTools
             await fileSem.WaitAsync(cancellationToken);
             semAcquired = true;
             var originalContent = await file.ReadTextAsync(cancellationToken);
-            var lines = originalContent.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
+            var lines = originalContent.Split(newLineSet, StringSplitOptions.None);
 
             // startLine is a 1-based line that must exist in the file.
             if (startLine < 1 || startLine > lines.Length)
@@ -191,7 +196,7 @@ public static partial class StorageWriteTools
                 throw new McpException($"Invalid endLine: {effectiveEndLine}. Stop blindly writing and use get_storable_info up front for line count. Must be between {startLine} and {lines.Length} (file has {lines.Length} lines)", McpErrorCode.InvalidParams);
 
             int rangeLineCount = effectiveEndLine - startLine + 1; // always >= 1
-            var newContentLines = content.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
+            var newContentLines = content.Split(newLineSet, StringSplitOptions.None);
 
             // A single write moves the line count in one direction only. Permitting both growth and shrink
             // at once erases the caller's stated intent, so it's a misfire rather than a valid free-form mode.
