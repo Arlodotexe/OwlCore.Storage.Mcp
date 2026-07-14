@@ -54,7 +54,7 @@ public static partial class StorageWriteTools
         }
     }
 
-    [Description("Creates a new file in the specified parent folder by ID or path. Content writes MUST be a second write_file_text or write_file_text_ranged tool call after creation.")]
+    [Description("Creates a new file in the specified parent folder by ID or path. Content writes MUST be a second write_file_text or write_file_text_range tool call after creation.")]
     public static async Task<StorableItemWithArchiveTypeResult> CreateFile(string parentFolderId, string fileName, bool overwrite = false)
     {
         var cancellationToken = CancellationToken.None;
@@ -161,8 +161,8 @@ public static partial class StorageWriteTools
         }
     }
 
-    [Description("Overwrites lines in an existing file (use create_file first if it doesn't exist). By default writes a single line at startLine; pass endLine to replace the inclusive 1-based range [startLine, endLine], which must satisfy startLine <= endLine <= line count. Strict by default: content must have exactly as many lines as the target range, preserving the file's line count. A write either grows or shrinks the range, never both — pass allowMoreLines=true when content has more lines than the range (grow), or allowLessLines=true when it has fewer (shrink). Setting both is rejected. No sentinel values: there is no position past the last line, so appending means replacing the last line (grow) with its existing content plus the new lines, which requires knowing the line count.")]
-    public static async Task<string> WriteFileTextRange(string fileId, string content, int startLine, int? endLine = null, bool? allowMoreLines = null, bool? allowLessLines = null)
+    [Description("Overwrites lines in an existing file (use create_file first if it doesn't exist). By default writes a single line at startLine; pass endLine to replace the inclusive 1-based range [startLine, endLine] which must satisfy startLine <= endLine <= line count. Strict by default: written content must have exactly as many lines as the target range preserving the file's line count unless more/less lines are explicitly allowed. A write either grows or shrinks the range, never both: use allowMoreLines=true when content has more lines than the range (grow target range via content) or allowLessLines=true when it has fewer (shrink target range via content), setting both is rejected. There is no position past the last line, appending means replacing the last line with its existing content plus the new lines via allowMoreLines, which requires knowing line count.")]
+    public static async Task<string> WriteFileTextRange(string fileId, string content, int startLine, int? endLine = null, bool allowMoreLines = false, bool allowLessLines = false)
     {
         SemaphoreSlim? fileSem = null;
         bool semAcquired = false;
