@@ -217,6 +217,12 @@ public static partial class StorageWriteTools
                     $"Too few lines: content has {newContentLines.Length} line(s) but the range {startLine}-{effectiveEndLine} spans {rangeLineCount} line(s). Provide exactly {rangeLineCount} line(s), or if intentional (check yourself for an erroneous write attempt) pass allowLessLines=true to remove lines.",
                     McpErrorCode.InvalidParams);
 
+            // Special case, TODO make flag or configurable filter (possibly regex)
+            if (file.Name.EndsWith("log.md") && !content.EndsWith("\n\n"))
+            {
+                throw new McpException("log.md file write content must end with a double newline", McpErrorCode.InvalidParams);
+            }
+            
             // Build the new content: lines before the range + content + lines after the range.
             var newLines = new List<string>(lines.Length + newContentLines.Length);
             newLines.AddRange(lines[0..(startLine - 1)]);
