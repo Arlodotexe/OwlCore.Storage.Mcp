@@ -119,6 +119,7 @@ void Logger_MessageReceived(object? sender, LoggerMessageEventArgs e)
     {
         var msg = $"+{Math.Round((DateTime.Now - startTime).TotalMilliseconds)}ms {Path.GetFileNameWithoutExtension(e.CallerFilePath)} {e.CallerMemberName}  [{e.Level}] {e.Exception} {e.Message}";
         logWriter.WriteLine(msg);
+        logWriter.Flush();
 
         if(e.Level == OwlCore.Diagnostics.LogLevel.Error || e.Level == OwlCore.Diagnostics.LogLevel.Critical)
             Console.Error.WriteLine(msg);    

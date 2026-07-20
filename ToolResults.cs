@@ -32,3 +32,6 @@ public record ExecuteResult(int ExitCode, string Stdout, string? Stderr, bool Ti
 public record StartResult(string Mode, bool? Started = null, string? Message = null, int? ExitCode = null, string? Stdout = null, string? Stderr = null, bool? TimedOut = null, string? Error = null);
 
 public record MountedFolderInfo(string ProtocolScheme, string MountName, string RootUri, string FolderType, string MountType, string OriginalId);
+
+public record FindMatchParams(string folderId, string[]? fileOrFolderGlobs, string? fileContentRegex);
+

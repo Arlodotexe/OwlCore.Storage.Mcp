@@ -10,12 +10,13 @@ using System.IO;
 using System.Threading;
 using OwlCore.Storage.SharpCompress;
 using SharpCompress.Common;
-
+using System.Text.RegularExpressions;
 namespace OwlCore.Storage.Mcp;
 
 public static partial class StorageWriteTools
 {
     private static readonly ConcurrentDictionary<string, IStorable> _storableRegistry = StorageTools._storableRegistry;
+    private static readonly HashSet<FindMatchParams> _guardedFileWrites = new();
 
     [Description("Creates a new folder in the specified parent folder by ID or path.")]
     public static async Task<StorableItemResult> CreateFolder(string parentFolderId, string folderName)
@@ -134,6 +135,8 @@ public static partial class StorageWriteTools
             if (!_storableRegistry.TryGetValue(fileId, out var item) || item is not IFile file)
                 throw new McpException($"File with ID '{fileId}' not found", McpErrorCode.InvalidParams);
 
+            // Check guard violations before writing
+            await CheckGuardViolations(file, content);
             // Use OpenWriteAsync with SetLength(0) to ensure proper truncation
             var fileSem = StorageTools._fileAccessSemaphores.GetOrAdd(file.Id, _ => new SemaphoreSlim(1, 1));
             await fileSem.WaitAsync(cancellationToken);
@@ -148,7 +151,7 @@ public static partial class StorageWriteTools
                 }
             }
             finally { fileSem.Release(); }
-            
+
             return $"Successfully wrote {content.Length} characters to file '{file.Name}'";
         }
         catch (McpException)
@@ -169,9 +172,6 @@ public static partial class StorageWriteTools
         try
         {
             string[] newLineSet = ["\r\n", "\r", "\n",];
-            content = content.Replace("\\n", "\n");
-            content = content.Replace("\\r", "\r");
-            content = content.Replace("\\r\\n", "\r\n");
 
             var cancellationToken = CancellationToken.None;
             await StorageTools.EnsureStorableRegistered(fileId, cancellationToken);
@@ -198,6 +198,8 @@ public static partial class StorageWriteTools
             int rangeLineCount = effectiveEndLine - startLine + 1; // always >= 1
             var newContentLines = content.Split(newLineSet, StringSplitOptions.None);
 
+            int lineCountDelta = newContentLines.Length - rangeLineCount;
+
             // A single write moves the line count in one direction only. Permitting both growth and shrink
             // at once erases the caller's stated intent, so it's a misfire rather than a valid free-form mode.
             if (allowMoreLines == true && allowLessLines == true)
@@ -217,12 +219,10 @@ public static partial class StorageWriteTools
                     $"Too few lines: content has {newContentLines.Length} line(s) but the range {startLine}-{effectiveEndLine} spans {rangeLineCount} line(s). Provide exactly {rangeLineCount} line(s), or if intentional (check yourself for an erroneous write attempt) pass allowLessLines=true to remove lines.",
                     McpErrorCode.InvalidParams);
 
-            // Special case, TODO make flag or configurable filter (possibly regex)
-            if (file.Name.EndsWith("log.md") && !content.EndsWith("\n\n"))
-            {
-                throw new McpException("log.md file write content must end with a double newline", McpErrorCode.InvalidParams);
-            }
-            
+
+            // Check guard violations (input content validation)
+            await CheckGuardViolations(file, content);
+
             // Build the new content: lines before the range + content + lines after the range.
             var newLines = new List<string>(lines.Length + newContentLines.Length);
             newLines.AddRange(lines[0..(startLine - 1)]);
@@ -231,7 +231,6 @@ public static partial class StorageWriteTools
                 newLines.AddRange(lines[effectiveEndLine..]);
 
             var finalContent = string.Join(Environment.NewLine, newLines);
-            int lineCountDelta = newContentLines.Length - rangeLineCount;
 
             // Use OpenWriteAsync with SetLength(0) to ensure proper truncation
             using (var stream = await file.OpenWriteAsync(cancellationToken))
@@ -256,6 +255,154 @@ public static partial class StorageWriteTools
         finally { if (semAcquired) fileSem!.Release(); }
     }
 
+    [Description("Guards or unguards a specific file write. Identical semantics to find_all-- if a file is found by specific find_all param values, then those param values can be safely reused here.")]
+    public static async Task<string> FileWriteGuard([Description("The ID of the folder to match within.")] string folderId,
+        [Description("\"add\", \"remove\", or \"list\"")] string action,
+        [Description($"Glob patterns to match against each single storable file/folder's name along a path (NOT full path itself), use '*' to match any or no chars, '?' for single char, or '**' for recursive directory match. Examples: '*.cs', 'test*', '**/*.json', '*filename*'. Optional param, matches all storables recursively if excluded. Either this, {nameof(fileContentRegex)}, or both must be included and non-empty.")] string[]? nameGlobs = null,
+        [Description($"Regex pattern to match within file contents. Only files are content-matched. Matched lines are returned with line numbers. Optional param, surfaces storables but not content if excluded. Either this, {nameof(nameGlobs)} or both must be included and non-empty.")] string? fileContentRegex = null
+        )
+    {
+        try
+        {
+            var cancellationToken = CancellationToken.None;
+            if (string.IsNullOrWhiteSpace(folderId))
+                throw new McpException("Folder ID cannot be empty", McpErrorCode.InvalidParams);
+
+            if (nameGlobs is not null && nameGlobs.Any(string.IsNullOrWhiteSpace) && string.IsNullOrWhiteSpace(fileContentRegex))
+                throw new McpException($"At least one of '{nameof(nameGlobs)}' or '{nameof(fileContentRegex)}' must be provided.", McpErrorCode.InvalidParams);
+
+            if (fileContentRegex is not null && string.IsNullOrWhiteSpace(fileContentRegex))
+                throw new McpException($"Empty regex cannot be used to find text or glob for files. Either include regex or exclude the {nameof(fileContentRegex)} parameter altogether.");
+
+            await StorageTools.EnsureStorableRegistered(folderId, cancellationToken);
+
+            if (!_storableRegistry.TryGetValue(folderId, out var registeredItem) || registeredItem is not IFolder folder)
+                throw new McpException($"Folder with ID '{folderId}' not found", McpErrorCode.InvalidParams);
+
+            var findMatchParams = new FindMatchParams(folder.Id, nameGlobs, fileContentRegex);
+            return action switch
+            {
+                "add" => Add(),
+                "remove" => Remove(),
+                "list" => List(),
+                _ => throw new McpException($"Invalid action \"{action}\"."),
+            };
+
+            string Add()
+            {
+                _guardedFileWrites.Add(findMatchParams);
+                return "Add success";
+            }
+
+            string Remove()
+            {
+                // HashSet auto-matches by record primitive values
+                return $"Remove success: {_guardedFileWrites.Remove(findMatchParams)}";
+            }
+
+            string List()
+            {
+                var listedItems = new StringBuilder();
+                listedItems.Append("| folderId | fileOrFolderGlobs | fileContentRegex |");
+                listedItems.AppendLine("| -: | - | - |");
+
+                foreach (var item in _guardedFileWrites)
+                {
+                    var globs = item.fileOrFolderGlobs?.Aggregate((x, y) => $"{x}, {y}");
+                    listedItems.AppendLine($"| {item.folderId} | {globs ?? "null"} | {item.fileContentRegex ?? "null"} |");
+                }
+
+                return listedItems.ToString();
+            }
+        }
+        catch (McpException) { throw; }
+        catch (Exception ex)
+        {
+            Logger.LogError($"{nameof(WriteFileGuard)} failed", ex);
+            throw new McpException($"Failed to run guard command: {ex.Message}", ex, McpErrorCode.InternalError);
+        }
+    }
+    private static async Task CheckGuardViolations(IFile file, string content)
+    {
+        var cancellationToken = CancellationToken.None;
+        foreach (var guard in _guardedFileWrites)
+        {
+            // Check if file is within or descendant of guard's folderId
+            bool folderMatches = false;
+            try
+            {
+                IFolder? parent = null;
+                IStorableChild? childItem = file as IStorableChild;
+                while (childItem is IStorableChild hasParent)
+                {
+                    parent = await hasParent.GetParentAsync(cancellationToken);
+                    childItem = parent as IChildFolder; // exit if no subsequent parent (reached root)
+
+                    if (parent?.Id == guard.folderId)
+                    {
+                        folderMatches = true;
+                        break;
+                    }
+                }
+
+            }
+            catch (Exception ex) { Logger.LogError(ex.Message, ex); folderMatches = false; }
+
+            if (!folderMatches) continue;
+
+            // Check name glob matching
+            bool nameMatches = true; // If no globs specified, consider it a match (matches all files in folder)
+            if (guard.fileOrFolderGlobs is not null && guard.fileOrFolderGlobs.Length > 0)
+            {
+                nameMatches = false;
+                foreach (var glob in guard.fileOrFolderGlobs)
+                {
+                    try
+                    {
+                        var regex = new Regex(StorageTools.GlobToRegex(glob), RegexOptions.IgnoreCase | RegexOptions.Compiled);
+                        if (regex.IsMatch(file.Name))
+                        {
+                            nameMatches = true;
+                            break;
+                        }
+                    }
+                    catch { /* Invalid glob, skip */ }
+                }
+            }
+
+            if (!nameMatches) continue;
+
+            // Guard matched - now enforce content validation or block
+            if (guard.fileContentRegex is not null)
+            {
+                try
+                {
+                    var contentRegex = new Regex(guard.fileContentRegex, RegexOptions.IgnoreCase);
+                    if (!contentRegex.IsMatch(content))
+                    {
+                        throw new McpException(
+                            $"Write blocked by guard: content does not match required pattern '{guard.fileContentRegex}' for files matching folder '{guard.folderId}'.",
+                            McpErrorCode.InvalidParams);
+                    }
+                }
+                catch (McpException) { throw; }
+                catch (ArgumentException ex)
+                {
+                    Logger.LogWarning($"Invalid guard content regex '{guard.fileContentRegex}': {ex.Message}");
+                    // Don't block on invalid regex - just log warning
+                }
+            }
+            else
+            {
+                // No content regex means block all writes to matching files
+                throw new McpException(
+                    $"Write blocked by guard: file '{file.Name}' matches protected pattern in folder '{guard.folderId}'.",
+                    McpErrorCode.InvalidParams);
+            }
+        }
+    }
+
+
     [Description("Deletes a file or folder by ID or path from its parent folder.")]
     public static async Task<string> DeleteItem(string parentFolderId, string itemName)
     {
@@ -272,11 +419,11 @@ public static partial class StorageWriteTools
                 throw new McpException($"Item '{itemName}' not found in folder or not deletable", McpErrorCode.InvalidParams);
 
             await modifiableParent.DeleteAsync(storableChild);
-            
+
             // Remove from registry if it was registered
             string itemId = ProtocolRegistry.IsCustomProtocol(parentFolderId) ? StorageTools.CreateCustomItemId(parentFolderId, itemName) : itemToDelete.Id;
             _storableRegistry.TryRemove(itemId, out _);
-            
+
             return $"Successfully deleted item '{itemName}' from folder '{parent.Name}'";
         }
         catch (McpException)
@@ -309,7 +456,7 @@ public static partial class StorageWriteTools
                 // File copy logic
                 // Determine the target file name
                 var targetFileName = !string.IsNullOrEmpty(newName) ? newName : sourceFile.Name;
-                
+
                 // Use the OwlCore.Storage extension method with rename support
                 IChildFile copiedFile;
                 if (!string.IsNullOrEmpty(newName) && newName != sourceFile.Name)
@@ -322,9 +469,9 @@ public static partial class StorageWriteTools
                     // Use the 3-parameter overload 
                     copiedFile = await targetModifiableFolder.CreateCopyOfAsync(sourceFile, overwrite);
                 }
-                
-                string newFileId = ProtocolRegistry.IsCustomProtocol(targetParentFolderId) ? 
-                    StorageTools.CreateCustomItemId(targetParentFolderId, copiedFile.Name) : 
+
+                string newFileId = ProtocolRegistry.IsCustomProtocol(targetParentFolderId) ?
+                    StorageTools.CreateCustomItemId(targetParentFolderId, copiedFile.Name) :
                     copiedFile.Id;
                 _storableRegistry[newFileId] = copiedFile;
 
@@ -345,7 +492,7 @@ public static partial class StorageWriteTools
                 {
                     // Compute full relative path from source root to the file (includes the filename)
                     var relativePath = await sourceFolder.GetRelativePathToAsync((IStorableChild)file);
-                    
+
                     // Strip filename to get parent folder path only
                     // CreateFolderByRelativePathAsync treats all segments as folders, including file-like names
                     var parentPath = string.Empty;
@@ -354,17 +501,17 @@ public static partial class StorageWriteTools
                         var lastSlashIndex = relativePath.LastIndexOf('/');
                         parentPath = relativePath.Substring(0, lastSlashIndex);
                     }
-                    
+
                     // Create parent folder structure (if any), otherwise use target root
                     var destinationFolder = string.IsNullOrEmpty(parentPath)
                         ? (IModifiableFolder)targetFolder
                         : (IModifiableFolder)await targetFolder.CreateFolderByRelativePathAsync(parentPath, overwrite: false, CancellationToken.None);
-                    
+
                     await destinationFolder.CreateCopyOfAsync(file, overwrite);
                 }
 
-                string newFolderId = ProtocolRegistry.IsCustomProtocol(targetParentFolderId) ? 
-                    StorageTools.CreateCustomItemId(targetParentFolderId, targetFolder.Name) : 
+                string newFolderId = ProtocolRegistry.IsCustomProtocol(targetParentFolderId) ?
+                    StorageTools.CreateCustomItemId(targetParentFolderId, targetFolder.Name) :
                     targetFolder.Id;
                 _storableRegistry[newFolderId] = targetFolder;
 
@@ -422,12 +569,12 @@ public static partial class StorageWriteTools
                     // Use the existing 3-parameter overload
                     movedFile = await targetModifiableFolder.MoveFromAsync(sourceFile, sourceModifiableFolder, overwrite);
                 }
-                
+
                 // Remove old registration and add new one
                 _storableRegistry.TryRemove(sourceItemId, out _);
 
-                string newFileId = ProtocolRegistry.IsCustomProtocol(targetParentFolderId) ? 
-                    StorageTools.CreateCustomItemId(targetParentFolderId, movedFile.Name) : 
+                string newFileId = ProtocolRegistry.IsCustomProtocol(targetParentFolderId) ?
+                    StorageTools.CreateCustomItemId(targetParentFolderId, movedFile.Name) :
                     movedFile.Id;
                 _storableRegistry[newFileId] = movedFile;
 
@@ -447,7 +594,7 @@ public static partial class StorageWriteTools
                 await foreach (var file in new DepthFirstRecursiveFolder(sourceFolder).GetFilesAsync(CancellationToken.None))
                 {
                     var relativePath = await sourceFolder.GetRelativePathToAsync((IStorableChild)file);
-                    
+
                     // Strip filename to get parent folder path only
                     // CreateFolderByRelativePathAsync treats all segments as folders, including file-like names
                     var parentPath = string.Empty;
@@ -456,12 +603,12 @@ public static partial class StorageWriteTools
                         var lastSlashIndex = relativePath.LastIndexOf('/');
                         parentPath = relativePath.Substring(0, lastSlashIndex);
                     }
-                    
+
                     // Create parent folder structure (if any), otherwise use target root
                     var destinationFolder = string.IsNullOrEmpty(parentPath)
                         ? (IModifiableFolder)targetFolder
                         : (IModifiableFolder)await targetFolder.CreateFolderByRelativePathAsync(parentPath, overwrite: false, CancellationToken.None);
-                    
+
                     await destinationFolder.CreateCopyOfAsync(file, overwrite);
                 }
 
@@ -471,8 +618,8 @@ public static partial class StorageWriteTools
                 // Remove old registration and add new one
                 _storableRegistry.TryRemove(sourceItemId, out _);
 
-                string newFolderId = ProtocolRegistry.IsCustomProtocol(targetParentFolderId) ? 
-                    StorageTools.CreateCustomItemId(targetParentFolderId, targetFolder.Name) : 
+                string newFolderId = ProtocolRegistry.IsCustomProtocol(targetParentFolderId) ?
+                    StorageTools.CreateCustomItemId(targetParentFolderId, targetFolder.Name) :
                     targetFolder.Id;
                 _storableRegistry[newFolderId] = targetFolder;
 
@@ -497,7 +644,7 @@ public static partial class StorageWriteTools
         }
     }
 
-    
+
 
     [Description("Creates any missing folders along a relative path from a starting item. If the last segment contains a dot and no trailing slash, it's treated as a file and the parent of the leaf is created. Supports '.' and '..' segments.")]
     public static async Task<StorableItemResult> CreateRelativeFolderPath(string startingItemId, string relativePath, bool overwrite = false)

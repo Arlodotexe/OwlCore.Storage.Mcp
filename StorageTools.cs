@@ -51,7 +51,7 @@ public static class StorageTools
     }
 
     // Issue003: inbound canonicalization for browsable protocols only (filesystem-like); resource protocols keep original form.
-    private static string NormalizeInboundExternalId(string id)
+    internal static string NormalizeInboundExternalId(string id)
     {
         if (string.IsNullOrWhiteSpace(id))
             return id;
@@ -540,7 +540,7 @@ public static class StorageTools
                 throw new McpException("Folder ID cannot be empty", McpErrorCode.InvalidParams);
 
             if (nameGlobs is not null && nameGlobs.Any(string.IsNullOrWhiteSpace) && string.IsNullOrWhiteSpace(fileContentRegex))
-                throw new McpException("At least one of 'nameOrPathGlob' or 'fileContentRegex' must be provided.", McpErrorCode.InvalidParams);
+                throw new McpException($"At least one of '{nameof(nameGlobs)}' or '{nameof(fileContentRegex)}' must be provided.", McpErrorCode.InvalidParams);
 
             if (maxResults <= 0)
                 throw new McpException("maxResults must be a positive integer", McpErrorCode.InvalidParams);
@@ -683,7 +683,7 @@ public static class StorageTools
     /// Converts a glob pattern to a regex pattern.
     /// Supports: * (any chars except separator), ? (single char), **/ (recursive directory match).
     /// </summary>
-    private static string GlobToRegex(string glob)
+    internal static string GlobToRegex(string glob)
     {
         var sb = new StringBuilder("^");
         int i = 0;
