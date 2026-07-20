@@ -318,7 +318,7 @@ public static partial class StorageWriteTools
         catch (McpException) { throw; }
         catch (Exception ex)
         {
-            Logger.LogError($"{nameof(WriteFileGuard)} failed", ex);
+            Logger.LogError($"{nameof(FileWriteGuard)} failed", ex);
             throw new McpException($"Failed to run guard command: {ex.Message}", ex, McpErrorCode.InternalError);
         }
     }
