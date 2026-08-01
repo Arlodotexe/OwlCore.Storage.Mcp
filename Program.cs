@@ -20,6 +20,7 @@ using OwlCore.Extensions;
 using Ipfs;
 using Ipfs.CoreApi;
 using CommunityToolkit.Diagnostics;
+using System.Runtime.InteropServices;
 
 var startTime = DateTime.Now;
 
@@ -121,8 +122,8 @@ void Logger_MessageReceived(object? sender, LoggerMessageEventArgs e)
         logWriter.WriteLine(msg);
         logWriter.Flush();
 
-        if(e.Level == OwlCore.Diagnostics.LogLevel.Error || e.Level == OwlCore.Diagnostics.LogLevel.Critical)
-            Console.Error.WriteLine(msg);    
+        if (e.Level == OwlCore.Diagnostics.LogLevel.Error || e.Level == OwlCore.Diagnostics.LogLevel.Critical)
+            Console.Error.WriteLine(msg);
     }
     finally
     {
@@ -349,6 +350,13 @@ public static class FileLauncherTool
             // LaunchGraphicalApplication: open with default GUI handler, fire-and-forget
             if (fileIdStartMode == StartMode.LaunchGraphicalApplication)
             {
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                {
+                    Guard.IsNullOrWhiteSpace(processArguments);
+                    processArguments = $"/c start \"\" \"{localId}\"";
+                    localId = "C:\\Windows\\System32\\cmd.exe";
+                }
+
                 var shellPsi = new ProcessStartInfo
                 {
                     FileName = localId,
