@@ -931,7 +931,7 @@ public static class StorageTools
 
             // Explicitly reject endLine of 0 since it's invalid (1-based indexing)
             if (endLine.HasValue && endLine.Value <= 0)
-                throw new McpException($"Invalid endLine value: {endLine.Value}. endLine must be >= 1 (1-based indexing) or null to read to end. To read to end, omit endLine entirely.", McpErrorCode.InvalidParams);
+                throw new McpException($"Invalid endLine value: {endLine.Value} for file '{file.Name}'. endLine must be >= 1 (1-based indexing) or null to read to end. To read to end, omit endLine entirely.", McpErrorCode.InvalidParams);
 
             // Validate columnLimit when provided
             if (columnLimit.HasValue && columnLimit.Value <= 0)
@@ -946,11 +946,11 @@ public static class StorageTools
 
             // Validate line numbers (1-based)
             if (startLine < 1 || startLine > lines.Length)
-                throw new McpException($"Invalid startLine: {startLine}. Stop blindly reading and use get_storable_info upfront for line count. Must be between 1 and {lines.Length} (file has {lines.Length} lines)", McpErrorCode.InvalidParams);
+                throw new McpException($"Invalid startLine: {startLine}. Stop blindly reading and use get_storable_info upfront for line count. Must be between 1 and {lines.Length} (file '{file.Name}' has {lines.Length} lines)", McpErrorCode.InvalidParams);
 
             int actualEndLine = endLine ?? lines.Length;
             if (actualEndLine < startLine || actualEndLine > lines.Length)
-                throw new McpException($"Invalid endLine: {actualEndLine}. Must be between {startLine} and {lines.Length}. Stop blindly reading and use get_storable_info upfront for line count.", McpErrorCode.InvalidParams);
+                throw new McpException($"Invalid endLine: {actualEndLine}. Must be between {startLine} and {lines.Length} (file '{file.Name}' has {lines.Length} lines). Stop blindly reading and use get_storable_info upfront for line count.", McpErrorCode.InvalidParams);
 
             // Extract the requested range (convert to 0-based indexing)
             var selectedLines = lines[(startLine - 1)..actualEndLine];
