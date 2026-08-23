@@ -474,57 +474,6 @@ public static class StorageTools
         }
     }
 
-    [Description("Gets an item with a known ID by recursively searching through a folder hierarchy. The targetItemId must be a known storable ID, not a filename or search term.")]
-    public static async Task<StorableItemResult?> GetItemRecursivelyById(string folderId, string targetItemId)
-    {
-        var cancellationToken = CancellationToken.None;
-        try
-        {
-            await EnsureStorableRegistered(folderId, cancellationToken);
-
-            if (!_storableRegistry.TryGetValue(folderId, out var registeredItem) || registeredItem is not IFolder folder)
-                throw new McpException($"Folder with ID '{folderId}' not found", McpErrorCode.InvalidParams);
-
-            try
-            {
-                var foundItem = await folder.GetItemRecursiveAsync(targetItemId);
-                _storableRegistry[foundItem.Id] = foundItem;
-
-                // Use mount alias substitution to present shorter IDs externally
-                string externalId = ProtocolRegistry.SubstituteWithMountAlias(foundItem.Id);
-                // Ensure the alias also maps to the same item for external access
-                if (externalId != foundItem.Id)
-                    _storableRegistry[externalId] = foundItem;
-                externalId = NormalizeOutboundAliasId(externalId, foundItem);
-                _storableRegistry[externalId] = foundItem;
-
-                return new StorableItemResult(
-                    Id: externalId,
-                    Name: foundItem.Name,
-                    Type: foundItem switch
-                    {
-                        IFile => "file",
-                        IFolder => "folder",
-                        _ => "unknown"
-                    }
-                );
-            }
-            catch (FileNotFoundException)
-            {
-                return null;
-            }
-        }
-        catch (McpException)
-        {
-            throw; // Re-throw MCP exceptions as-is
-        }
-        catch (Exception ex)
-        {
-            throw new McpException($"Failed to find item '{targetItemId}' recursively in '{folderId}': {ex.Message}", ex, McpErrorCode.InternalError);
-        }
-    }
-
-
     [Description("Searches for files and folders by name patterns within a folder hierarchy. Uses depth-first recursive traversal. Supports glob patterns (e.g., '*.cs', 'src/**/*.json') for file/folder names and regex patterns for file content.")]
     public static async Task<FindResultWithMatches[]> FindAll(
         [Description("The ID of the folder to search within.")] string folderId,
@@ -879,43 +828,6 @@ public static class StorageTools
             + $"\n\n[Output truncated, excluded {string.Join(", ", truncationParts)}. Use read_file_text_range for larger or more precise reads.]";
     }
 
-    [Description("Reads a preview of file text, limited to 100 lines and 256 columns per line. Use for small files or quick previews. For larger or precise reads, use get_storable_info first, then use read_file_text_range.")]
-    public static async Task<string> ReadFileAsText([Description("The ID of the file to read.")] string fileId, string encoding = "UTF-8")
-    {
-        var cancellationToken = CancellationToken.None;
-        try
-        {
-            await EnsureStorableRegistered(fileId, cancellationToken);
-
-            if (!_storableRegistry.TryGetValue(fileId, out var item) || item is not IFile file)
-                throw new McpException($"File with ID '{fileId}' not found", McpErrorCode.InvalidParams);
-
-            var textEncoding = encoding.ToUpperInvariant() switch
-            {
-                "UTF-8" or "UTF8" => Encoding.UTF8,
-                "UTF-16" or "UTF16" => Encoding.Unicode,
-                "ASCII" => Encoding.ASCII,
-                "UNICODE" => Encoding.Unicode,
-                _ => Encoding.UTF8
-            };
-
-            var fileSem = _fileAccessSemaphores.GetOrAdd(file.Id, _ => new SemaphoreSlim(1, 1));
-            await fileSem.WaitAsync(cancellationToken);
-            string content;
-            try { content = await file.ReadTextAsync(textEncoding, CancellationToken.None); }
-            finally { fileSem.Release(); }
-            return ApplyDefaultReadFileAsTextTruncation(content);
-        }
-        catch (McpException)
-        {
-            throw; // Re-throw MCP exceptions as-is
-        }
-        catch (Exception ex)
-        {
-            throw new McpException($"Failed to read text with encoding '{encoding}' from file '{fileId}': {ex.Message}", ex, McpErrorCode.InternalError);
-        }
-    }
-
     private const int ReadFileTextRangeMaxBytes = 8 * 1024 - 192; // 8 KB minus overhead for truncation message
 
     [Description("Reads file text from http, https, local storage, memory, ipfs, ipns, mfs, and all other supported protocols. Max 8KB reads per call, tool result tells you where to resume if truncated.")]
@@ -1132,56 +1044,6 @@ public static class StorageTools
         catch (Exception ex)
         {
             throw new McpException($"Failed to get root folder for '{itemId}': {ex.Message}", ex, McpErrorCode.InternalError);
-        }
-    }
-
-    [Description("Gets a specific item by the item's ID from a folder.")]
-    public static async Task<StorableItemResult> GetItemById(string folderId, string itemId)
-    {
-        var cancellationToken = CancellationToken.None;
-        try
-        {
-            await EnsureStorableRegistered(folderId, cancellationToken);
-
-            if (!_storableRegistry.TryGetValue(folderId, out var registeredItem) || registeredItem is not IFolder folder)
-                throw new McpException($"Folder with ID '{folderId}' not found", McpErrorCode.InvalidParams);
-
-            try
-            {
-                var foundItem = await folder.GetItemAsync(itemId);
-                _storableRegistry[foundItem.Id] = foundItem;
-
-                // Use mount alias substitution to present shorter IDs externally
-                string externalId = ProtocolRegistry.SubstituteWithMountAlias(foundItem.Id);
-                // Ensure the alias also maps to the same item for external access
-                if (externalId != foundItem.Id)
-                    _storableRegistry[externalId] = foundItem;
-                externalId = NormalizeOutboundAliasId(externalId, foundItem);
-                _storableRegistry[externalId] = foundItem;
-
-                return new StorableItemResult(
-                    Id: externalId,
-                    Name: foundItem.Name,
-                    Type: foundItem switch
-                    {
-                        IFile => "file",
-                        IFolder => "folder",
-                        _ => "unknown"
-                    }
-                );
-            }
-            catch (FileNotFoundException)
-            {
-                throw new McpException($"Item with ID '{itemId}' not found in folder '{folder.Name}'", McpErrorCode.InvalidParams);
-            }
-        }
-        catch (McpException)
-        {
-            throw; // Re-throw MCP exceptions as-is
-        }
-        catch (Exception ex)
-        {
-            throw new McpException($"Failed to get item '{itemId}' from folder '{folderId}': {ex.Message}", ex, McpErrorCode.InternalError);
         }
     }
 

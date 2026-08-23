@@ -124,46 +124,6 @@ public static partial class StorageWriteTools
         }
     }
 
-    [Description("Writes text content to a file by file ID or path. The file must already exist — use create_file to create it first.")]
-    public static async Task<string> WriteFileText(string fileId, string content)
-    {
-        var cancellationToken = CancellationToken.None;
-        try
-        {
-            await StorageTools.EnsureStorableRegistered(fileId, cancellationToken);
-
-            if (!_storableRegistry.TryGetValue(fileId, out var item) || item is not IFile file)
-                throw new McpException($"File with ID '{fileId}' not found", McpErrorCode.InvalidParams);
-
-            // Check guard violations before writing
-            await CheckGuardViolations(file, content);
-            // Use OpenWriteAsync with SetLength(0) to ensure proper truncation
-            var fileSem = StorageTools._fileAccessSemaphores.GetOrAdd(file.Id, _ => new SemaphoreSlim(1, 1));
-            await fileSem.WaitAsync(cancellationToken);
-            try
-            {
-                using (var stream = await file.OpenWriteAsync(cancellationToken))
-                {
-                    stream.SetLength(0);  // Truncate old content
-                    using var writer = new StreamWriter(stream, new UTF8Encoding(false), leaveOpen: false);
-                    await writer.WriteAsync(content);
-                    await writer.FlushAsync();
-                }
-            }
-            finally { fileSem.Release(); }
-
-            return $"Successfully wrote {content.Length} characters to file '{file.Name}'";
-        }
-        catch (McpException)
-        {
-            throw; // Re-throw MCP exceptions as-is
-        }
-        catch (Exception ex)
-        {
-            throw new McpException($"Failed to write text to file '{fileId}': {ex.Message}", ex, McpErrorCode.InternalError);
-        }
-    }
-
     [Description("Overwrites lines in an existing file (use create_file first if it doesn't exist). By default writes a single line at startLine (1-indexed, not 0-indexed); pass endLine to replace the inclusive 1-based range [startLine, endLine] which must satisfy startLine <= endLine <= line count. Strict by default: written content must have exactly as many lines as the target range preserving the file's line count unless more/less lines are explicitly allowed. A write either grows or shrinks the range, never both: use allowMoreLines=true when content has more lines than the range (grow target range via content) or allowLessLines=true when it has fewer (shrink target range via content), setting both is rejected. An empty file has one line per 1-indexing. There is no position past the last line, appending means replacing the last line with its existing content plus the new lines via allowMoreLines, which requires knowing line count.")]
     public static async Task<string> WriteFileTextRange(string fileId, [Description("Supports newline literals \\n, \\r\\n and \\r")] string content, int startLine, int? endLine = null, bool allowMoreLines = false, bool allowLessLines = false)
     {
