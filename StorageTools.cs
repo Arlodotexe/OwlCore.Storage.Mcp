@@ -178,7 +178,7 @@ public static class StorageTools
                     await foreach (var node in mountRootFolder.GetItemsAlongRelativePathAsync(pathPortion, cancellationToken))
                     {
                         _storableRegistry[node.Id] = node;
-                        var aliasId = ProtocolRegistry.SubstituteWithMountAlias(node.Id);
+                        var aliasId = await ProtocolRegistry.SubstituteWithMountAliasAsync(node.Id);
                         if (aliasId != node.Id)
                             _storableRegistry[aliasId] = node;
                         var normalizedAliasId = NormalizeOutboundAliasId(aliasId, node);
@@ -212,7 +212,7 @@ public static class StorageTools
             // Check for ambiguity: this native ID may also be the root of a protocol or mount.
             // If so, the model should use the protocol alias instead of the raw path.
             var aliases = await ProtocolRegistry.GetAllAliasesForNativeIdAsync(registrationId);
-            if (aliases.Count > 0)
+            if (aliases.Count > 1)
             {
                 throw new InvalidOperationException(
                     $"Ambiguous ID '{registrationId}': this path is also the underlying root of {aliases.Count} protocol(s). " +
@@ -340,9 +340,12 @@ public static class StorageTools
         {
             try
             {
-                // Create a SystemFolder for each drive
-                var driveFolder = new SystemFolder(new DirectoryInfo(drive.RootDirectory.FullName));
-                _storableRegistry[drive.RootDirectory.FullName] = driveFolder;
+                // Register the drive root through the shared resolution path instead of writing the
+                // native ID into the registry directly. Seeding it here would bind the key ahead of the
+                // ambiguity check and make behavior depend on call order: drive roots whose ID is also the
+                // root of another storage instance stay unbound, so callers must disambiguate via an alias.
+                try { await EnsureStorableRegistered(drive.RootDirectory.FullName, cancellationToken); }
+                catch (InvalidOperationException) { } // Ambiguous drive root: use the protocol alias (e.g. "file://") instead.
 
                 // Add drive info to result
                 driveInfos.Add(new DriveInfoResult(
@@ -452,7 +455,7 @@ public static class StorageTools
             {
                 string itemId = ProtocolRegistry.IsCustomProtocol(folderId) ? CreateCustomItemId(folderId, item.Name) : item.Id;
                 _storableRegistry[itemId] = item;
-                string externalId = ProtocolRegistry.SubstituteWithMountAlias(itemId);
+                string externalId = await ProtocolRegistry.SubstituteWithMountAliasAsync(itemId);
                 if (externalId != itemId)
                     _storableRegistry[externalId] = item;
                 externalId = NormalizeOutboundAliasId(externalId, item);
@@ -552,7 +555,7 @@ public static class StorageTools
                 _storableRegistry[item.Id] = item;
                 await EnsureStorableRegistered(item.Id, cancellationToken);
 
-                string externalId = ProtocolRegistry.SubstituteWithMountAlias(item.Id);
+                string externalId = await ProtocolRegistry.SubstituteWithMountAliasAsync(item.Id);
                 await EnsureStorableRegistered(externalId, cancellationToken);
 
                 // Name filter
@@ -701,7 +704,7 @@ public static class StorageTools
             await foreach (var node in startingItem.GetItemsAlongRelativePathAsync(relativePath, CancellationToken.None))
             {
                 _storableRegistry[node.Id] = node;
-                var aliasId = ProtocolRegistry.SubstituteWithMountAlias(node.Id);
+                var aliasId = await ProtocolRegistry.SubstituteWithMountAliasAsync(node.Id);
                 if (aliasId != node.Id)
                     _storableRegistry[aliasId] = node;
                 var normalizedAliasId = NormalizeOutboundAliasId(aliasId, node);
@@ -714,7 +717,7 @@ public static class StorageTools
             var targetItem = lastItem;
             _storableRegistry[targetItem.Id] = targetItem;
 
-            var externalId = ProtocolRegistry.SubstituteWithMountAlias(targetItem.Id);
+            var externalId = await ProtocolRegistry.SubstituteWithMountAliasAsync(targetItem.Id);
             if (externalId != targetItem.Id)
                 _storableRegistry[externalId] = targetItem;
             externalId = NormalizeOutboundAliasId(externalId, targetItem);
@@ -764,7 +767,7 @@ public static class StorageTools
             await foreach (var node in fromFolder.GetItemsAlongRelativePathAsync(relative, CancellationToken.None))
             {
                 _storableRegistry[node.Id] = node;
-                var aliasId = ProtocolRegistry.SubstituteWithMountAlias(node.Id);
+                var aliasId = await ProtocolRegistry.SubstituteWithMountAliasAsync(node.Id);
                 if (aliasId != node.Id)
                     _storableRegistry[aliasId] = node;
                 var normalizedAliasId = NormalizeOutboundAliasId(aliasId, node);
@@ -1024,7 +1027,7 @@ public static class StorageTools
             _storableRegistry[rootFolder.Id] = rootFolder;
 
             // Use mount alias substitution to present shorter IDs externally
-            string externalId = ProtocolRegistry.SubstituteWithMountAlias(rootFolder.Id);
+            string externalId = await ProtocolRegistry.SubstituteWithMountAliasAsync(rootFolder.Id);
             // Ensure the alias also maps to the same item for external access
             if (externalId != rootFolder.Id)
                 _storableRegistry[externalId] = rootFolder;
@@ -1065,7 +1068,7 @@ public static class StorageTools
             _storableRegistry[parentFolder.Id] = parentFolder;
 
             // Use mount alias substitution to present shorter IDs externally
-            string externalId = ProtocolRegistry.SubstituteWithMountAlias(parentFolder.Id);
+            string externalId = await ProtocolRegistry.SubstituteWithMountAliasAsync(parentFolder.Id);
             // Ensure the alias also maps to the same item for external access
             if (externalId != parentFolder.Id)
                 _storableRegistry[externalId] = parentFolder;
@@ -1095,16 +1098,6 @@ public static class StorageTools
         {
             var protocols = new List<ProtocolInfoResult>();
 
-            // Add built-in filesystem support
-            protocols.Add(new ProtocolInfoResult(
-                Scheme: "file",
-                Name: "Local File System",
-                Type: "filesystem",
-                HasBrowsableRoot: true,
-                SupportsDirectResources: false,
-                Description: "Local disk drives and folders"
-            ));
-
             // Add custom protocols
             foreach (var protocolScheme in ProtocolRegistry.GetRegisteredProtocols())
             {
@@ -1123,6 +1116,7 @@ public static class StorageTools
                         {
                             "mfs" => "IPFS Mutable File System - browsable IPFS storage",
                             "memory" => "In-memory temporary storage for testing",
+                            "file" => "Local disk drives and folders",
                             "http" or "https" => "HTTP/HTTPS web resources and files",
                             "ipfs" => "IPFS content addressed by hash - files or folders accessible by hash",
                             "ipns" => "IPNS names that resolve to IPFS content - files or folders accessible by name",

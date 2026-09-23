@@ -626,7 +626,7 @@ public static partial class StorageWriteTools
             // TODO: We need to do this for the entire chain of created folders from result to startingItem.
             // Maybe optimize by having `CreateRelativeFolderPathAsync` return IAsyncEnumerable<IFolder>?
             _storableRegistry[resultFolder.Id] = resultFolder;
-            string externalId = ProtocolRegistry.SubstituteWithMountAlias(resultFolder.Id);
+            string externalId = await ProtocolRegistry.SubstituteWithMountAliasAsync(resultFolder.Id);
             if (externalId != resultFolder.Id)
                 _storableRegistry[externalId] = resultFolder;
             externalId = StorageTools.NormalizeOutboundAliasId(externalId, resultFolder);

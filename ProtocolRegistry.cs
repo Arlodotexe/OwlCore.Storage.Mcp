@@ -28,7 +28,7 @@ namespace OwlCore.Storage.Mcp;
 /// (e.g., OneDrive/MS Graph), IPFS CIDs, or any other opaque identifier.
 /// </para>
 /// <para>
-/// <strong>Alias creation</strong> (<see cref="SubstituteWithMountAlias"/>): Given a native storage ID,
+/// <strong>Alias creation</strong> (<see cref="SubstituteWithMountAliasAsync"/>): Given a native storage ID,
 /// finds the mounted folder whose native ID is a leading substring of the target ID, and replaces
 /// that prefix with the mount's protocol scheme. For example, if <c>home://</c> is mounted to
 /// <c>/home/username/</c>, then native ID <c>/home/username/Documents/file.txt</c> becomes
@@ -110,6 +110,7 @@ public static class ProtocolRegistry
         RegisterProtocol("ipfs", new IpfsProtocolHandler(ipfsClient));
         RegisterProtocol("ipns", new IpnsProtocolHandler(ipfsClient));
         RegisterProtocol("memory", new MemoryProtocolHandler());
+        RegisterProtocol("file", new FileProtocolHandler());
         // Add more protocols here as needed
         // RegisterProtocol("azure-blob", new AzureBlobProtocolHandler());
         // RegisterProtocol("s3", new S3ProtocolHandler());
@@ -738,12 +739,14 @@ public static class ProtocolRegistry
     }
 
     /// <summary>
-    /// Finds all known protocol/mount aliases whose underlying (native) root ID matches the given ID.
-    /// Used to disambiguate when a native ID collides across implementations.
+    /// Enumerates the aliases of exactly those storage instances whose root ID equals <paramref name="nativeId"/>:
+    /// mounted folder roots, and built-in browsable protocol roots. Browsable roots are created on demand, because the
+    /// claimant count must not depend on which roots happened to be loaded earlier in this session.
+    /// This is the single-vs-multiple disambiguation primitive: exactly 1 = unambiguous, 2 or more = ambiguous.
     /// </summary>
     /// <param name="nativeId">The native storage ID to look up.</param>
-    /// <returns>List of alias URIs (e.g., <c>mfs://</c>, <c>home://</c>) whose root maps to this native ID.</returns>
-    public static async Task<List<string>> GetAllAliasesForNativeIdAsync(string nativeId)
+    /// <returns>Alias URIs (e.g., <c>mfs://</c>) whose owning instance's root maps exactly to this native ID.</returns>
+    private static async Task<List<string>> GetExactRootClaimantAliasesAsync(string nativeId)
     {
         var aliases = new List<string>();
         if (string.IsNullOrWhiteSpace(nativeId))
@@ -790,6 +793,23 @@ public static class ProtocolRegistry
             }
         }
 
+        return aliases;
+    }
+
+    /// <summary>
+    /// Finds all known protocol/mount aliases whose underlying (native) root ID matches the given ID.
+    /// Used to disambiguate when a native ID collides across implementations.
+    /// Besides the exact root claimants (see <see cref="GetExactRootClaimantAliasesAsync"/>), this also reports
+    /// aliases that merely reach the ID through an ancestor mount, so its count is not a claimant count.
+    /// </summary>
+    /// <param name="nativeId">The native storage ID to look up.</param>
+    /// <returns>List of alias URIs (e.g., <c>mfs://</c>, <c>home://</c>) whose root maps to this native ID.</returns>
+    public static async Task<List<string>> GetAllAliasesForNativeIdAsync(string nativeId)
+    {
+        var aliases = await GetExactRootClaimantAliasesAsync(nativeId);
+        if (string.IsNullOrWhiteSpace(nativeId))
+            return aliases;
+
         // Also check mounts whose underlying ID starts with nativeId (subfolder mounts)
         foreach (var mount in _mountedFolders.Values)
         {
@@ -815,7 +835,11 @@ public static class ProtocolRegistry
     /// </summary>
     /// <param name="fullId">The full ID to potentially substitute</param>
     /// <returns>The shortest possible alias ID, or the original ID if no suitable mount exists</returns>
-    public static string SubstituteWithMountAlias(string fullId)
+    /// <remarks>
+    /// Substitution to a built-in browsable protocol root is declined when that root ID is claimed by more than one
+    /// storage instance, so callers must disambiguate via alias instead of being silently routed to one of them.
+    /// </remarks>
+    public static async Task<string> SubstituteWithMountAliasAsync(string fullId)
     {
         if (string.IsNullOrWhiteSpace(fullId))
             return fullId;
@@ -868,7 +892,7 @@ public static class ProtocolRegistry
             if (fullId.StartsWith(rootId, StringComparison.OrdinalIgnoreCase))
             {
                 var matchLength = rootId.Length;
-                if (matchLength > longestMatchLength)
+                if (matchLength > longestMatchLength && (await GetExactRootClaimantAliasesAsync(rootId)).Count == 1)
                 {
                     var remainingPart = fullId.Substring(matchLength);
                     var aliasId = string.IsNullOrEmpty(remainingPart) ?
@@ -884,7 +908,7 @@ public static class ProtocolRegistry
         // If we found a substitution, recursively check if it can be further shortened
         if (bestAlias != fullId)
         {
-            var furtherSubstituted = SubstituteWithMountAlias(bestAlias);
+            var furtherSubstituted = await SubstituteWithMountAliasAsync(bestAlias);
             if (furtherSubstituted != bestAlias)
                 return furtherSubstituted;
         }
@@ -899,7 +923,7 @@ public static class ProtocolRegistry
     /// <param name="maxDepth">Maximum resolution depth to prevent infinite loops</param>
     /// <returns>The fully resolved underlying ID</returns>
     /// <remarks>
-    /// This is the inverse of <see cref="SubstituteWithMountAlias"/>.
+    /// This is the inverse of <see cref="SubstituteWithMountAliasAsync"/>.
     /// Replaces the mount scheme prefix (<c>scheme://</c>) with the mounted folder's native ID,
     /// reversing the string substitution that created the alias. Recurses to handle chained mounts.
     /// Does NOT assume IDs are filesystem paths — uses pure string concatenation, not Path.Combine.
@@ -923,8 +947,8 @@ public static class ProtocolRegistry
                 break;
 
             // Reverse the alias substitution: replace "scheme://" with the folder's native ID.
-            // This is the exact inverse of SubstituteWithMountAlias, which replaced the native ID
-            // prefix with "scheme://". SubstituteWithMountAlias trims leading separators from the
+            // This is the exact inverse of SubstituteWithMountAliasAsync, which replaced the native ID
+            // prefix with "scheme://". SubstituteWithMountAliasAsync trims leading separators from the
             // remaining part, so we must re-add one if the native ID doesn't end with a separator
             // and there is a remaining part.
             var remaining = currentId.Substring($"{scheme}://".Length);
