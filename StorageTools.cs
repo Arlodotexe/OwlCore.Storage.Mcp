@@ -985,8 +985,17 @@ public static class StorageTools
                 }
 
 
+                // Emit the shortest unambiguous alias and register it for round-tripping,
+                // exactly like every other outbound ID site (see get_folder_items).
+                string externalId = await ProtocolRegistry.SubstituteWithMountAliasAsync(storable.Id);
+                if (externalId != storable.Id)
+                    _storableRegistry[externalId] = storable;
+                externalId = NormalizeOutboundAliasId(externalId, storable);
+                _storableRegistry[externalId] = storable;
+
                 results.Add(new StorableInfoResult(
-                    Id: storable.Id,
+                    Id: externalId,
+
                     Name: storable.Name,
                     Type: typeStr,
                     SizeBytes: sizeBytes,
