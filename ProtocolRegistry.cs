@@ -834,12 +834,18 @@ public static class ProtocolRegistry
     /// Substitutes long IDs with shorter mount aliases where possible, to make them more manageable for smaller models
     /// </summary>
     /// <param name="fullId">The full ID to potentially substitute</param>
-    /// <returns>The shortest possible alias ID, or the original ID if no suitable mount exists</returns>
+    /// <param name="provenanceId">
+    /// The ID the caller addressed <paramref name="fullId"/> through, when it was reached via an alias. Proves which
+    /// built-in browsable root to credit when several instances share that root's native ID. Never substitutes on its own.
+    /// </param>
+    /// <returns>The shortest possible alias ID, or the original ID if no suitable alias is unambiguous</returns>
     /// <remarks>
-    /// Substitution to a built-in browsable protocol root is declined when that root ID is claimed by more than one
-    /// storage instance, so callers must disambiguate via alias instead of being silently routed to one of them.
+    /// A built-in browsable protocol root is only substituted in when its alias names exactly one storage instance:
+    /// either that root's native ID has a single claimant (see <see cref="GetExactRootClaimantAliasesAsync"/>), or the
+    /// caller proved the ID was reached through that same root (<paramref name="provenanceId"/>). Otherwise the ID is
+    /// returned unchanged rather than silently routed to one of the instances sharing the root ID.
     /// </remarks>
-    public static async Task<string> SubstituteWithMountAliasAsync(string fullId)
+    public static async Task<string> SubstituteWithMountAliasAsync(string fullId, string? provenanceId = null)
     {
         if (string.IsNullOrWhiteSpace(fullId))
             return fullId;
@@ -875,6 +881,11 @@ public static class ProtocolRegistry
             }
         }
 
+        // The built-in root the caller addressed this ID through, if it addressed it through an alias at all.
+        // Native IDs and unaliased paths carry no scheme, so they yield no provenance and change nothing above.
+        var provenanceScheme = ExtractScheme(provenanceId ?? string.Empty);
+        var provenanceRootUri = provenanceScheme is null ? null : $"{provenanceScheme}://";
+
         // Also check built-in browsable protocol roots (e.g., mfs:// with native root ID "/")
         foreach (var (scheme, handler) in _protocolHandlers)
         {
@@ -892,7 +903,13 @@ public static class ProtocolRegistry
             if (fullId.StartsWith(rootId, StringComparison.OrdinalIgnoreCase))
             {
                 var matchLength = rootId.Length;
-                if (matchLength > longestMatchLength && (await GetExactRootClaimantAliasesAsync(rootId)).Count == 1)
+                // The alias must name exactly one storage instance. That holds when this root's native ID has a
+                // single claimant, or when the caller reached this ID through this root's own alias (provenance),
+                // which is the only signal that separates mfs://x from file://x while both roots share native ID "/".
+                // With multiple claimants and no provenance, the ID stays native instead of naming a guessed instance.
+                if (matchLength > longestMatchLength &&
+                    ((provenanceRootUri != null && string.Equals(provenanceRootUri, rootUri, StringComparison.OrdinalIgnoreCase))
+                     || (await GetExactRootClaimantAliasesAsync(rootId)).Count == 1))
                 {
                     var remainingPart = fullId.Substring(matchLength);
                     var aliasId = string.IsNullOrEmpty(remainingPart) ?

@@ -178,7 +178,7 @@ public static class StorageTools
                     await foreach (var node in mountRootFolder.GetItemsAlongRelativePathAsync(pathPortion, cancellationToken))
                     {
                         _storableRegistry[node.Id] = node;
-                        var aliasId = await ProtocolRegistry.SubstituteWithMountAliasAsync(node.Id);
+                        var aliasId = await ProtocolRegistry.SubstituteWithMountAliasAsync(node.Id, id);
                         if (aliasId != node.Id)
                             _storableRegistry[aliasId] = node;
                         var normalizedAliasId = NormalizeOutboundAliasId(aliasId, node);
@@ -455,7 +455,7 @@ public static class StorageTools
             {
                 string itemId = ProtocolRegistry.IsCustomProtocol(folderId) ? CreateCustomItemId(folderId, item.Name) : item.Id;
                 _storableRegistry[itemId] = item;
-                string externalId = await ProtocolRegistry.SubstituteWithMountAliasAsync(itemId);
+                string externalId = await ProtocolRegistry.SubstituteWithMountAliasAsync(itemId, folderId);
                 if (externalId != itemId)
                     _storableRegistry[externalId] = item;
                 externalId = NormalizeOutboundAliasId(externalId, item);
@@ -555,7 +555,7 @@ public static class StorageTools
                 _storableRegistry[item.Id] = item;
                 await EnsureStorableRegistered(item.Id, cancellationToken);
 
-                string externalId = await ProtocolRegistry.SubstituteWithMountAliasAsync(item.Id);
+                string externalId = await ProtocolRegistry.SubstituteWithMountAliasAsync(item.Id, folderId);
                 await EnsureStorableRegistered(externalId, cancellationToken);
 
                 // Name filter
@@ -704,7 +704,7 @@ public static class StorageTools
             await foreach (var node in startingItem.GetItemsAlongRelativePathAsync(relativePath, CancellationToken.None))
             {
                 _storableRegistry[node.Id] = node;
-                var aliasId = await ProtocolRegistry.SubstituteWithMountAliasAsync(node.Id);
+                var aliasId = await ProtocolRegistry.SubstituteWithMountAliasAsync(node.Id, startingItemId);
                 if (aliasId != node.Id)
                     _storableRegistry[aliasId] = node;
                 var normalizedAliasId = NormalizeOutboundAliasId(aliasId, node);
@@ -717,7 +717,7 @@ public static class StorageTools
             var targetItem = lastItem;
             _storableRegistry[targetItem.Id] = targetItem;
 
-            var externalId = await ProtocolRegistry.SubstituteWithMountAliasAsync(targetItem.Id);
+            var externalId = await ProtocolRegistry.SubstituteWithMountAliasAsync(targetItem.Id, startingItemId);
             if (externalId != targetItem.Id)
                 _storableRegistry[externalId] = targetItem;
             externalId = NormalizeOutboundAliasId(externalId, targetItem);
@@ -767,7 +767,7 @@ public static class StorageTools
             await foreach (var node in fromFolder.GetItemsAlongRelativePathAsync(relative, CancellationToken.None))
             {
                 _storableRegistry[node.Id] = node;
-                var aliasId = await ProtocolRegistry.SubstituteWithMountAliasAsync(node.Id);
+                var aliasId = await ProtocolRegistry.SubstituteWithMountAliasAsync(node.Id, fromFolderId);
                 if (aliasId != node.Id)
                     _storableRegistry[aliasId] = node;
                 var normalizedAliasId = NormalizeOutboundAliasId(aliasId, node);
@@ -987,7 +987,7 @@ public static class StorageTools
 
                 // Emit the shortest unambiguous alias and register it for round-tripping,
                 // exactly like every other outbound ID site (see get_folder_items).
-                string externalId = await ProtocolRegistry.SubstituteWithMountAliasAsync(storable.Id);
+                string externalId = await ProtocolRegistry.SubstituteWithMountAliasAsync(storable.Id, id);
                 if (externalId != storable.Id)
                     _storableRegistry[externalId] = storable;
                 externalId = NormalizeOutboundAliasId(externalId, storable);
@@ -1036,7 +1036,7 @@ public static class StorageTools
             _storableRegistry[rootFolder.Id] = rootFolder;
 
             // Use mount alias substitution to present shorter IDs externally
-            string externalId = await ProtocolRegistry.SubstituteWithMountAliasAsync(rootFolder.Id);
+            string externalId = await ProtocolRegistry.SubstituteWithMountAliasAsync(rootFolder.Id, itemId);
             // Ensure the alias also maps to the same item for external access
             if (externalId != rootFolder.Id)
                 _storableRegistry[externalId] = rootFolder;
@@ -1077,7 +1077,7 @@ public static class StorageTools
             _storableRegistry[parentFolder.Id] = parentFolder;
 
             // Use mount alias substitution to present shorter IDs externally
-            string externalId = await ProtocolRegistry.SubstituteWithMountAliasAsync(parentFolder.Id);
+            string externalId = await ProtocolRegistry.SubstituteWithMountAliasAsync(parentFolder.Id, itemId);
             // Ensure the alias also maps to the same item for external access
             if (externalId != parentFolder.Id)
                 _storableRegistry[externalId] = parentFolder;
