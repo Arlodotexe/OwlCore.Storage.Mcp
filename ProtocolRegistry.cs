@@ -844,6 +844,9 @@ public static class ProtocolRegistry
     /// either that root's native ID has a single claimant (see <see cref="GetExactRootClaimantAliasesAsync"/>), or the
     /// caller proved the ID was reached through that same root (<paramref name="provenanceId"/>). Otherwise the ID is
     /// returned unchanged rather than silently routed to one of the instances sharing the root ID.
+    /// As a last resort, an alias the caller addressed is kept when the instance registered for it is the same instance
+    /// <paramref name="fullId"/> names, which preserves the scheme for protocols whose native IDs omit it, such as ipfs.
+    /// No alias is ever invented: every result is either a registered root/mount alias or an ID the caller supplied.
     /// </remarks>
     public static async Task<string> SubstituteWithMountAliasAsync(string fullId, string? provenanceId = null)
     {
@@ -929,6 +932,16 @@ public static class ProtocolRegistry
             if (furtherSubstituted != bestAlias)
                 return furtherSubstituted;
         }
+
+        // No mount or browsable-root alias applied above. If the caller reached this item through an alias that names
+        // this exact instance, keep that alias instead of emitting the instance's native ID: protocols whose native
+        // IDs omit their scheme (ipfs://<CID>, ipns://<name>) would otherwise hand back a scheme-less, unusable ID.
+        // This only ever returns an ID the caller itself addressed, so it renames no other ID, and an item reached
+        // through a parent's alias fails the identity check below and stays native (L123/L124 behavior preserved).
+        if (bestAlias == fullId && !string.IsNullOrWhiteSpace(provenanceId) &&
+            StorageTools._storableRegistry.TryGetValue(provenanceId, out var provenanceInstance) &&
+            string.Equals(provenanceInstance.Id, fullId, StringComparison.OrdinalIgnoreCase))
+            return provenanceId;
 
         return bestAlias;
     }
