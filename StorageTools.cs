@@ -209,14 +209,16 @@ public static class StorageTools
         // Handle regular filesystem paths first (fast path)
         if (Directory.Exists(registrationId))
         {
-            // Check for ambiguity: this native ID may also be the root of a protocol or mount.
-            // If so, the model should use the protocol alias instead of the raw path.
-            var aliases = await ProtocolRegistry.GetAllAliasesForNativeIdAsync(registrationId);
-            if (aliases.Count > 1)
+            // Ambiguity is about how many storage instances share this ID, not how many routes reach it:
+            // exactly one claimant (or none) is unambiguous; two or more means the caller has to name the
+            // instance by addressing one of its aliases. Aliases that merely reach this ID through an ancestor
+            // mount are extra routes to a single instance, so they disambiguate nothing and are not counted here.
+            var claimants = await ProtocolRegistry.GetExactRootClaimantAliasesAsync(registrationId);
+            if (claimants.Count > 1)
             {
                 throw new InvalidOperationException(
-                    $"Ambiguous ID '{registrationId}': this path is also the underlying root of {aliases.Count} protocol(s). " +
-                    $"Use the protocol alias instead: {string.Join(", ", aliases.Select(a => $"'{a}'"))}. " +
+                    $"Ambiguous ID '{registrationId}': this path is also the underlying root of {claimants.Count} protocol(s). " +
+                    $"Use the protocol alias instead: {string.Join(", ", claimants.Select(a => $"'{a}'"))}. " +
                     $"These aliases disambiguate between storage implementations that share the same native ID.");
             }
 
@@ -985,11 +987,11 @@ public static class StorageTools
                 }
 
 
-                // Emit the shortest unambiguous alias and register it for round-tripping,
-                // exactly like every other outbound ID site (see get_folder_items).
-                string externalId = await ProtocolRegistry.SubstituteWithMountAliasAsync(storable.Id, id);
-                if (externalId != storable.Id)
-                    _storableRegistry[externalId] = storable;
+                // This tool deliberately reports the storage instance's own (raw) ID instead of substituting an
+                // alias, unlike every other outbound ID site (see get_folder_items): it answers what an ID is.
+                // Only the scheme is preserved, for protocols whose native IDs omit it (ipfs/ipns), and the
+                // reported ID is registered so it round-trips straight back into this layer.
+                string externalId = ProtocolRegistry.PreserveAddressedScheme(storable.Id, id);
                 externalId = NormalizeOutboundAliasId(externalId, storable);
                 _storableRegistry[externalId] = storable;
 

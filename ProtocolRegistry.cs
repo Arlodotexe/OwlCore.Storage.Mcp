@@ -746,7 +746,7 @@ public static class ProtocolRegistry
     /// </summary>
     /// <param name="nativeId">The native storage ID to look up.</param>
     /// <returns>Alias URIs (e.g., <c>mfs://</c>) whose owning instance's root maps exactly to this native ID.</returns>
-    private static async Task<List<string>> GetExactRootClaimantAliasesAsync(string nativeId)
+    public static async Task<List<string>> GetExactRootClaimantAliasesAsync(string nativeId)
     {
         var aliases = new List<string>();
         if (string.IsNullOrWhiteSpace(nativeId))
@@ -789,40 +789,6 @@ public static class ProtocolRegistry
                 if (root != null && string.Equals(root.Id, nativeId, StringComparison.OrdinalIgnoreCase))
                 {
                     aliases.Add(rootUri);
-                }
-            }
-        }
-
-        return aliases;
-    }
-
-    /// <summary>
-    /// Finds all known protocol/mount aliases whose underlying (native) root ID matches the given ID.
-    /// Used to disambiguate when a native ID collides across implementations.
-    /// Besides the exact root claimants (see <see cref="GetExactRootClaimantAliasesAsync"/>), this also reports
-    /// aliases that merely reach the ID through an ancestor mount, so its count is not a claimant count.
-    /// </summary>
-    /// <param name="nativeId">The native storage ID to look up.</param>
-    /// <returns>List of alias URIs (e.g., <c>mfs://</c>, <c>home://</c>) whose root maps to this native ID.</returns>
-    public static async Task<List<string>> GetAllAliasesForNativeIdAsync(string nativeId)
-    {
-        var aliases = await GetExactRootClaimantAliasesAsync(nativeId);
-        if (string.IsNullOrWhiteSpace(nativeId))
-            return aliases;
-
-        // Also check mounts whose underlying ID starts with nativeId (subfolder mounts)
-        foreach (var mount in _mountedFolders.Values)
-        {
-            if (mount.MountedFolder is IStorableChild mountedChild)
-            {
-                var mountedId = mountedChild.Id;
-                // If the native ID starts with this mount's ID, it's reachable through it
-                if (nativeId.StartsWith(mountedId, StringComparison.OrdinalIgnoreCase) && nativeId != mountedId)
-                {
-                    var remaining = nativeId.Substring(mountedId.Length);
-                    var aliasPath = $"{mount.ProtocolScheme}://{remaining.TrimStart('/', '\\')}";
-                    if (!aliases.Contains(aliasPath))
-                        aliases.Add(aliasPath);
                 }
             }
         }
@@ -933,18 +899,35 @@ public static class ProtocolRegistry
                 return furtherSubstituted;
         }
 
-        // No mount or browsable-root alias applied above. If the caller reached this item through an alias that names
-        // this exact instance, keep that alias instead of emitting the instance's native ID: protocols whose native
-        // IDs omit their scheme (ipfs://<CID>, ipns://<name>) would otherwise hand back a scheme-less, unusable ID.
-        // This only ever returns an ID the caller itself addressed, so it renames no other ID, and an item reached
-        // through a parent's alias fails the identity check below and stays native (L123/L124 behavior preserved).
-        if (bestAlias == fullId && !string.IsNullOrWhiteSpace(provenanceId) &&
-            StorageTools._storableRegistry.TryGetValue(provenanceId, out var provenanceInstance) &&
-            string.Equals(provenanceInstance.Id, fullId, StringComparison.OrdinalIgnoreCase))
-            return provenanceId;
-
-        return bestAlias;
+        // No mount or browsable-root alias applied above: keep the scheme the caller addressed this item
+        // through when the instance's own ID omits it, so scheme-less native IDs stay routable on the way out.
+        return PreserveAddressedScheme(bestAlias, provenanceId);
     }
+
+    /// <summary>
+    /// Reports the scheme-qualified ID the caller addressed an item through instead of that item's native ID,
+    /// but only when the native ID omits the scheme and the addressed protocol has no browsable root
+    /// (e.g. ipfs://&lt;CID&gt;, ipns://&lt;name&gt;): such native IDs cannot be routed back on their own.
+    /// Protocols with a browsable root have self-describing native IDs (a path), which are reported as addressed.
+    /// Never invents an ID: the result is either the given ID or an ID the caller itself supplied, and an item
+    /// reached through a parent's alias fails the identity check below and stays native (L123/L124 preserved).
+    /// </summary>
+    /// <param name="nativeId">The ID to report, typically the storage instance's own ID.</param>
+    /// <param name="addressedId">The ID the caller used to reach that item, when it was addressed via an alias.</param>
+    public static string PreserveAddressedScheme(string nativeId, string? addressedId)
+    {
+        if (string.IsNullOrWhiteSpace(addressedId) || addressedId == nativeId)
+            return nativeId;
+        if (ExtractScheme(nativeId) != null || ExtractScheme(addressedId) == null)
+            return nativeId;
+        if (GetProtocolHandler(addressedId) is { HasBrowsableRoot: true })
+            return nativeId;
+        return StorageTools._storableRegistry.TryGetValue(addressedId, out var addressedInstance) &&
+               string.Equals(addressedInstance.Id, nativeId, StringComparison.OrdinalIgnoreCase)
+            ? addressedId
+            : nativeId;
+    }
+
 
     /// <summary>
     /// Resolves a potentially aliased ID back to its full underlying (native) ID.
