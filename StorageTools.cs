@@ -342,16 +342,27 @@ public static class StorageTools
         {
             try
             {
-                // Register the drive root through the shared resolution path instead of writing the
-                // native ID into the registry directly. Seeding it here would bind the key ahead of the
-                // ambiguity check and make behavior depend on call order: drive roots whose ID is also the
-                // root of another storage instance stay unbound, so callers must disambiguate via an alias.
-                try { await EnsureStorableRegistered(drive.RootDirectory.FullName, cancellationToken); }
-                catch (InvalidOperationException) { } // Ambiguous drive root: use the protocol alias (e.g. "file://") instead.
+                var rootId = drive.RootDirectory.FullName;
+
+                // Never hand back an ID that this same server would refuse: a drive root shared by more than
+                // one storage instance is ambiguous, so the bare path names no single instance and is dropped
+                // here rather than guessed at. Each claimant is listed under its own protocol alias further
+                // below, so the usable IDs for this root are still present in the same response.
+                var claimants = await ProtocolRegistry.GetExactRootClaimantAliasesAsync(rootId);
+                if (claimants.Count > 1)
+                {
+                    Logger.LogInformation($"[DRIVES] Skipping '{rootId}': ambiguous ID claimed by {claimants.Count} storage instances ({string.Join(", ", claimants)}), each listed under its own alias.");
+                    continue;
+                }
+
+                // Register the drive root through the shared resolution path instead of writing the native ID
+                // into the registry directly, so every drive root listed here is immediately usable as an ID.
+                await EnsureStorableRegistered(rootId, cancellationToken);
 
                 // Add drive info to result
                 driveInfos.Add(new DriveInfoResult(
-                    Id: drive.RootDirectory.FullName,
+                    Id: rootId,
+
                     Name: !string.IsNullOrEmpty(drive.VolumeLabel) ? $"{drive.Name} ({drive.VolumeLabel})" : drive.Name,
                     Type: "drive",
                     DriveType: drive.DriveType.ToString(),
@@ -1007,14 +1018,18 @@ public static class StorageTools
                     CreatedAt: storable is ICreatedAt createdAt ? await createdAt.CreatedAt.GetValueAsync(cancellationToken) : null
                 ));
             }
-            catch (McpException)
+            catch (OperationCanceledException)
             {
-                throw; // Re-throw MCP exceptions as-is
+                throw; // Cancellation concerns the whole call, not a single ID.
             }
             catch (Exception ex)
             {
-                throw new McpException($"Failed to get storable info for '{id}': {ex.Message}", ex, McpErrorCode.InternalError);
+                // One bad ID doesn't discard the info already gathered for the others. The reason this ID
+                // failed is reported on its own row, keeping the actionable text (such as the aliases that
+                // resolve an ambiguous ID) attached to the ID it came from.
+                results.Add(new StorableInfoResult(Id: id, Error: ex.Message));
             }
+
         }
 
         return results.ToArray();
