@@ -39,8 +39,16 @@ public static partial class StorageWriteTools
             string newFolderId = ProtocolRegistry.IsCustomProtocol(parentFolderId) ? StorageTools.CreateCustomItemId(parentFolderId, folderName) : newFolder.Id;
             _storableRegistry[newFolderId] = newFolder;
 
+            // Expose the unambiguous alias for this item, as the other id-returning tools do.
+            string externalId = await ProtocolRegistry.SubstituteWithMountAliasAsync(newFolderId, parentFolderId);
+            if (externalId != newFolderId)
+                _storableRegistry[externalId] = newFolder;
+            externalId = StorageTools.NormalizeOutboundAliasId(externalId, newFolder);
+            _storableRegistry[externalId] = newFolder;
+
             return new StorableItemResult(
-                Id: newFolderId,
+                Id: externalId,
+
                 Name: newFolder.Name,
                 Type: "folder"
             );
@@ -103,8 +111,16 @@ public static partial class StorageWriteTools
             string newFileId = ProtocolRegistry.IsCustomProtocol(parentFolderId) ? StorageTools.CreateCustomItemId(parentFolderId, fileName) : newFile.Id;
             _storableRegistry[newFileId] = newFile;
 
+            // Expose the unambiguous alias for this item, as the other id-returning tools do.
+            string externalId = await ProtocolRegistry.SubstituteWithMountAliasAsync(newFileId, parentFolderId);
+            if (externalId != newFileId)
+                _storableRegistry[externalId] = newFile;
+            externalId = StorageTools.NormalizeOutboundAliasId(externalId, newFile);
+            _storableRegistry[externalId] = newFile;
+
             return new StorableItemWithArchiveTypeResult(
-                Id: newFileId,
+                Id: externalId,
+
                 Name: newFile.Name,
                 Type: "file",
                 ArchiveType: archiveType?.ToString()
@@ -435,8 +451,16 @@ public static partial class StorageWriteTools
                     copiedFile.Id;
                 _storableRegistry[newFileId] = copiedFile;
 
+                // Expose the unambiguous alias for this item, as the other id-returning tools do.
+                string externalId = await ProtocolRegistry.SubstituteWithMountAliasAsync(newFileId, targetParentFolderId);
+                if (externalId != newFileId)
+                    _storableRegistry[externalId] = copiedFile;
+                externalId = StorageTools.NormalizeOutboundAliasId(externalId, copiedFile);
+                _storableRegistry[externalId] = copiedFile;
+
                 return new StorableItemResult(
-                    Id: newFileId,
+                    Id: externalId,
+
                     Name: copiedFile.Name,
                     Type: "file"
                 );
@@ -475,8 +499,16 @@ public static partial class StorageWriteTools
                     targetFolder.Id;
                 _storableRegistry[newFolderId] = targetFolder;
 
+                // Expose the unambiguous alias for this item, as the other id-returning tools do.
+                string externalId = await ProtocolRegistry.SubstituteWithMountAliasAsync(newFolderId, targetParentFolderId);
+                if (externalId != newFolderId)
+                    _storableRegistry[externalId] = targetFolder;
+                externalId = StorageTools.NormalizeOutboundAliasId(externalId, targetFolder);
+                _storableRegistry[externalId] = targetFolder;
+
                 return new StorableItemResult(
-                    Id: newFolderId,
+                    Id: externalId,
+
                     Name: targetFolder.Name,
                     Type: "folder"
                 );
@@ -538,8 +570,16 @@ public static partial class StorageWriteTools
                     movedFile.Id;
                 _storableRegistry[newFileId] = movedFile;
 
+                // Expose the unambiguous alias for this item, as the other id-returning tools do.
+                string externalId = await ProtocolRegistry.SubstituteWithMountAliasAsync(newFileId, targetParentFolderId);
+                if (externalId != newFileId)
+                    _storableRegistry[externalId] = movedFile;
+                externalId = StorageTools.NormalizeOutboundAliasId(externalId, movedFile);
+                _storableRegistry[externalId] = movedFile;
+
                 return new StorableItemResult(
-                    Id: newFileId,
+                    Id: externalId,
+
                     Name: movedFile.Name,
                     Type: "file"
                 );
@@ -583,8 +623,16 @@ public static partial class StorageWriteTools
                     targetFolder.Id;
                 _storableRegistry[newFolderId] = targetFolder;
 
+                // Expose the unambiguous alias for this item, as the other id-returning tools do.
+                string externalId = await ProtocolRegistry.SubstituteWithMountAliasAsync(newFolderId, targetParentFolderId);
+                if (externalId != newFolderId)
+                    _storableRegistry[externalId] = targetFolder;
+                externalId = StorageTools.NormalizeOutboundAliasId(externalId, targetFolder);
+                _storableRegistry[externalId] = targetFolder;
+
                 return new StorableItemResult(
-                    Id: newFolderId,
+                    Id: externalId,
+
                     Name: targetFolder.Name,
                     Type: "folder"
                 );
