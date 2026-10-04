@@ -497,8 +497,8 @@ public static class StorageTools
     [Description("Searches for files and folders by name patterns within a folder hierarchy. Uses depth-first recursive traversal. Supports glob patterns (e.g., '*.cs', 'src/**/*.json') for file/folder names and regex patterns for file content.")]
     public static async Task<FindAllResult> FindAll(
         [Description("The ID of the folder to search within.")] string folderId,
-        [Description($"Glob patterns to match against each single storable file/folder's name along a path (NOT full path itself), use '*' to match any or no chars, '?' for single char, or '**' for recursive directory match. Examples: '*.cs', 'test*', '**/*.json', '*foldername*'. Optional param, searches all storables recursively if excluded. Either this, {nameof(fileContentRegex)}, or both must be included and non-empty.")] string[]? nameGlobs = null,
-        [Description($"Regex pattern to search within file contents. Only files are content-searched. Matched lines are returned with line numbers; match text shares an 8 KB pool across all results (each shown match at least 256 columns) and any truncation discloses a read_file_text_range startLine/startColumn resume. Optional param, surfaces storables but not content if excluded. Either this, {nameof(nameGlobs)} or both must be included and non-empty.")] string? fileContentRegex = null,
+        [Description($"Glob patterns to match against each single storable file/folder's name along a path (NOT full path itself), use '*' to match any or no chars, '?' for single char, or '**' for recursive directory match. Examples: '*.cs', 'test*', '**/*.json', '*foldername*'. Optional param, searches all storables recursively if omitted (empty strings are invalid — omit the parameter instead). Either this, {nameof(fileContentRegex)}, or both must be included and non-empty.")] string[]? nameGlobs = null,
+        [Description($"Regex pattern to search within file contents. Only files are content-searched. Matched lines are returned with line numbers; match text shares an 8 KB pool across all results (each shown match at least 256 columns) and any truncation discloses a read_file_text_range startLine/startColumn resume. Optional param, surfaces storables but not content if omitted (empty strings are invalid — omit the parameter instead). Either this, {nameof(nameGlobs)} or both must be included and non-empty.")] string? fileContentRegex = null,
         [Description("What to filter for glob and regex matches: 'all' (default), 'file', or 'folder'. ")] string storableTypeToMatch = "all",
         [Description("Maximum number of results to return. Default 100.")] int maxResults = 100)
     {
@@ -507,9 +507,6 @@ public static class StorageTools
         {
             if (string.IsNullOrWhiteSpace(folderId))
                 throw new McpException("Folder ID cannot be empty", McpErrorCode.InvalidParams);
-
-            if (nameGlobs is not null && nameGlobs.Any(string.IsNullOrWhiteSpace) && string.IsNullOrWhiteSpace(fileContentRegex))
-                throw new McpException($"At least one of '{nameof(nameGlobs)}' or '{nameof(fileContentRegex)}' must be provided.", McpErrorCode.InvalidParams);
 
             if (maxResults <= 0)
                 throw new McpException("maxResults must be a positive integer", McpErrorCode.InvalidParams);
@@ -523,11 +520,16 @@ public static class StorageTools
             if (!_storableRegistry.TryGetValue(folderId, out var registeredItem) || registeredItem is not IFolder folder)
                 throw new McpException($"Folder with ID '{folderId}' not found", McpErrorCode.InvalidParams);
 
-            // Build name glob regex
+            // Build name glob regex (provided = must contain at least one non-empty pattern; empty entries are invalid)
             List<Regex> nameRegexes = new();
-            if (nameGlobs is not null && !nameGlobs.Any(string.IsNullOrWhiteSpace))
+            if (nameGlobs is not null)
             {
-                foreach (var nameGlob in nameGlobs.PruneNull())
+                if (nameGlobs.Length == 0)
+                    throw new McpException("nameGlobs is empty — omit the parameter instead of passing empty strings.", McpErrorCode.InvalidParams);
+                foreach (var nameGlob in nameGlobs)
+                {
+                    if (string.IsNullOrWhiteSpace(nameGlob))
+                        throw new McpException("nameGlobs contains an empty entry — omit the parameter instead of passing empty strings.", McpErrorCode.InvalidParams);
                     try
                     {
                         var regex = new Regex(GlobToRegex(nameGlob), RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -537,12 +539,15 @@ public static class StorageTools
                     {
                         throw new McpException($"Invalid glob pattern '{nameGlob}': {ex.Message}", McpErrorCode.InvalidParams);
                     }
+                }
             }
 
-            // Build content regex
+            // Build content regex (provided but empty = invalid; omit the parameter instead)
             Regex? fileContentRegexCompiled = null;
-            if (!string.IsNullOrWhiteSpace(fileContentRegex))
+            if (fileContentRegex is not null)
             {
+                if (string.IsNullOrWhiteSpace(fileContentRegex))
+                    throw new McpException("fileContentRegex is empty — omit the parameter instead of passing an empty string.", McpErrorCode.InvalidParams);
                 try
                 {
                     fileContentRegexCompiled = new Regex(fileContentRegex, RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -552,6 +557,9 @@ public static class StorageTools
                     throw new McpException($"Invalid content regex '{fileContentRegex}': {ex.Message}", McpErrorCode.InvalidParams);
                 }
             }
+
+            if ((nameGlobs is null || (nameGlobs is not null && nameGlobs.Any(string.IsNullOrWhiteSpace))) && string.IsNullOrWhiteSpace(fileContentRegex))
+                throw new McpException($"At least one of '{nameof(nameGlobs)}' or '{nameof(fileContentRegex)}' must be provided.", McpErrorCode.InvalidParams);
 
             // Determine StorableType filter
             var storableType = storableTypeToMatch.ToLowerInvariant() switch
