@@ -544,7 +544,7 @@ public static class FileLauncherTool
                 var excludedLines = endLine - keep;
                 return trimmed
                     + $"\n\n[Output truncated to {StartStdioRangeMaxBytes} bytes. "
-                    + $"{excludedLines} lines excluded. Read fileId `{fullPersistedFileId}` (or list/find_all in folderId `{processRunRelPathDir}` globbed at relative path `./{trimmedContentKind}`) from startLine {keep + 1} to continue.]";
+                    + $"{excludedLines} lines excluded. Read fileId `{fullPersistedFileId}` (or list/find in folderId `{processRunRelPathDir}` globbed at relative path `./{trimmedContentKind}`) from startLine {keep + 1} to continue.]";
             }
             keep--;
         }

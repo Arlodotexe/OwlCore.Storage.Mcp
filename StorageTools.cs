@@ -490,12 +490,12 @@ public static class StorageTools
         }
     }
 
-    private const int FindAllBudgetBytes = 8 * 1024 - 192;          // shared pool for all match text (same 8KB ceiling as ranged reads)
-    private const int FindAllMinColumnsPerMatch = 256;              // minimum columns guaranteed per match before any match receives extra
-    private const int FindAllPerMatchOverheadBytes = 128;           // reserved per match for its truncation disclosure + JSON escaping
+    private const int FindBudgetBytes = 8 * 1024 - 192;          // shared pool for all match text (same 8KB ceiling as ranged reads)
+    private const int FindMinColumnsPerMatch = 256;              // minimum columns guaranteed per match before any match receives extra
+    private const int FindPerMatchOverheadBytes = 128;           // reserved per match for its truncation disclosure + JSON escaping
 
     [Description("Searches for files and folders by name patterns within a folder hierarchy. Uses depth-first recursive traversal. Supports glob patterns (e.g., '*.cs', 'src/**/*.json') for file/folder names and regex patterns for file content.")]
-    public static async Task<FindAllResult> FindAll(
+    public static async Task<FindResult> Find(
         [Description("The ID of the folder to search within.")] string folderId,
         [Description($"Glob patterns to match against each single storable file/folder's name along a path (NOT full path itself), use '*' to match any or no chars, '?' for single char, or '**' for recursive directory match. Examples: '*.cs', 'test*', '**/*.json', '*foldername*'. Optional param, searches all storables recursively if omitted (empty strings are invalid — omit the parameter instead). Either this, {nameof(fileContentRegex)}, or both must be included and non-empty.")] string[]? nameGlobs = null,
         [Description($"Regex pattern to search within file contents. Only files are content-searched. Matched lines are returned with line numbers; match text shares an 8 KB pool across all results (each shown match at least 256 columns) and any truncation discloses a read_file_text_range startLine/startColumn resume. Optional param, surfaces storables but not content if omitted (empty strings are invalid — omit the parameter instead). Either this, {nameof(nameGlobs)} or both must be included and non-empty.")] string? fileContentRegex = null,
@@ -576,7 +576,7 @@ public static class StorageTools
                 _ => throw new McpException($"Invalid itemType '{storableTypeToMatch}'. Use 'all', 'file', or 'folder'.", McpErrorCode.InvalidParams)
             };
             var recursive = new DepthFirstRecursiveFolder(folder);
-            var entries = new List<FindAllEntry>();
+            var entries = new List<FindEntry>();
             var fileLimitHit = false;
 
             await foreach (var item in recursive.GetItemsAsync(storableType, cancellationToken))
@@ -625,16 +625,16 @@ public static class StorageTools
                         try { content = await file.ReadTextAsync(CancellationToken.None); }
                         finally { fileSem.Release(); }
                         var lines2 = content.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
-                        var fileMatches = new List<PendingFindAllMatch>();
+                        var fileMatches = new List<PendingFindMatch>();
 
                         for (int i = 0; i < lines2.Length; i++)
                         {
                             if (fileContentRegexCompiled.IsMatch(lines2[i]))
-                                fileMatches.Add(new PendingFindAllMatch(externalId, item.Name, i + 1, lines2[i].TrimEnd()));
+                                fileMatches.Add(new PendingFindMatch(externalId, item.Name, i + 1, lines2[i].TrimEnd()));
                         }
 
                         if (fileMatches.Count > 0)
-                            entries.Add(new FindAllEntry(new FindResultWithMatches(Id: externalId, Name: item.Name, Type: typeStr), fileMatches));
+                            entries.Add(new FindEntry(new FindResultWithMatches(Id: externalId, Name: item.Name, Type: typeStr), fileMatches));
                     }
                     catch
                     {
@@ -647,7 +647,7 @@ public static class StorageTools
                 }
                 else
                 {
-                    entries.Add(new FindAllEntry(new FindResultWithMatches(Id: externalId, Name: item.Name, Type: typeStr), null));
+                    entries.Add(new FindEntry(new FindResultWithMatches(Id: externalId, Name: item.Name, Type: typeStr), null));
                 }
 
                 if (entries.Count >= maxResults)
@@ -658,12 +658,12 @@ public static class StorageTools
             }
 
             // Shared 8KB pool across all matches (starvation-proof), then regroup per file — traversal order preserved.
-            var pending = new List<PendingFindAllMatch>();
+            var pending = new List<PendingFindMatch>();
             foreach (var entry in entries)
                 if (entry.Matches is not null)
                     pending.AddRange(entry.Matches);
 
-            var (shownMatches, droppedMatches) = AllocateFindAllMatchBudget(pending);
+            var (shownMatches, droppedMatches) = AllocateFindMatchBudget(pending);
             var shownByKey = shownMatches.ToDictionary(a => (a.Match.FileId, a.Match.Line));
 
             var finalResults = new List<FindResultWithMatches>(entries.Count);
@@ -689,11 +689,11 @@ public static class StorageTools
             if (droppedMatches > 0)
             {
                 var lineLabel = droppedMatches == 1 ? "line" : "lines";
-                notes.Add($"{droppedMatches} matched {lineLabel} dropped to fit the {FindAllBudgetBytes}-byte pool — rerun with a narrower pattern to surface them");
+                notes.Add($"{droppedMatches} matched {lineLabel} dropped to fit the {FindBudgetBytes}-byte pool — rerun with a narrower pattern to surface them");
             }
             if (fileLimitHit)
                 notes.Add($"Traversal stopped at {maxResults} results — more matches may exist; rerun with a higher maxResults or a narrower pattern");
-            return new FindAllResult(finalResults.ToArray(), notes.Count > 0 ? string.Join("; ", notes) + "." : null);
+            return new FindResult(finalResults.ToArray(), notes.Count > 0 ? string.Join("; ", notes) + "." : null);
         }
         catch (McpException) { throw; }
         catch (Exception ex)
@@ -702,13 +702,13 @@ public static class StorageTools
         }
     }
 
-    private sealed record FindAllEntry(FindResultWithMatches Result, List<PendingFindAllMatch>? Matches);
+    private sealed record FindEntry(FindResultWithMatches Result, List<PendingFindMatch>? Matches);
 
-    private readonly record struct PendingFindAllMatch(string FileId, string FileName, int Line, string Text);
+    private readonly record struct PendingFindMatch(string FileId, string FileName, int Line, string Text);
 
-    private readonly record struct AllocatedFindAllMatch(PendingFindAllMatch Match, string Text);
+    private readonly record struct AllocatedFindMatch(PendingFindMatch Match, string Text);
 
-    private static (AllocatedFindAllMatch[] Shown, int Dropped) AllocateFindAllMatchBudget(IReadOnlyList<PendingFindAllMatch> pending)
+    private static (AllocatedFindMatch[] Shown, int Dropped) AllocateFindMatchBudget(IReadOnlyList<PendingFindMatch> pending)
     {
         // Phase 1: secure a minimum for as many matches (in order) as the pool allows — a huge match can't starve a small one.
         var secured = new List<(int Index, int MinBytes)>();
@@ -716,18 +716,18 @@ public static class StorageTools
         for (var i = 0; i < pending.Count; i++)
         {
             var text = pending[i].Text;
-            var minCols = Math.Min(text.Length, FindAllMinColumnsPerMatch);
+            var minCols = Math.Min(text.Length, FindMinColumnsPerMatch);
             var minBytes = Encoding.UTF8.GetByteCount(text[..minCols]);
-            var cost = minBytes + FindAllPerMatchOverheadBytes;
-            if (used + cost > FindAllBudgetBytes) break;
+            var cost = minBytes + FindPerMatchOverheadBytes;
+            if (used + cost > FindBudgetBytes) break;
             secured.Add((i, minBytes));
             used += cost;
         }
 
         // Phase 2: split the remainder evenly across secured matches (even, not proportional — no match may hog the pool).
-        var extra = secured.Count > 0 ? (FindAllBudgetBytes - used) / secured.Count : 0;
+        var extra = secured.Count > 0 ? (FindBudgetBytes - used) / secured.Count : 0;
 
-        var shown = new List<AllocatedFindAllMatch>(secured.Count);
+        var shown = new List<AllocatedFindMatch>(secured.Count);
         foreach (var (index, minBytes) in secured)
         {
             var text = pending[index].Text;
@@ -748,7 +748,7 @@ public static class StorageTools
             var finalText = cut < text.Length
                 ? text[..cut] + $" […+{text.Length - cut} more columns on line {pending[index].Line} — resume with read_file_text_range: startLine {pending[index].Line}, startColumn {cut + 1}]"
                 : text;
-            shown.Add(new AllocatedFindAllMatch(pending[index], finalText));
+            shown.Add(new AllocatedFindMatch(pending[index], finalText));
         }
 
         return (shown.ToArray(), pending.Count - shown.Count);

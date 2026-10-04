@@ -30,7 +30,7 @@ public record ContentMatchLine(int Line, string Text);
 
 public record FindResultWithMatches(string Id, string Name, string Type, ContentMatchLine[]? Matches = null);
 
-public record FindAllResult(FindResultWithMatches[] Results, string? TruncationNote);
+public record FindResult(FindResultWithMatches[] Results, string? TruncationNote);
 
 public record LaunchResult(bool Started, string Mode, string Message);
 

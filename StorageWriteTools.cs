@@ -231,7 +231,7 @@ public static partial class StorageWriteTools
         finally { if (semAcquired) fileSem!.Release(); }
     }
 
-    [Description("Guards or unguards a specific file write. Identical semantics to find_all-- if a file is found by specific find_all param values, then those param values can be safely reused here.")]
+    [Description("Guards or unguards a specific file write. Identical semantics to find-- if a file is found by specific find param values, then those param values can be safely reused here.")]
     public static async Task<string> FileWriteGuard([Description("The ID of the folder to match within.")] string folderId,
         [Description("\"add\", \"remove\", or \"list\"")] string action,
         [Description($"Glob patterns to match against each single storable file/folder's name along a path (NOT full path itself), use '*' to match any or no chars, '?' for single char, or '**' for recursive directory match. Examples: '*.cs', 'test*', '**/*.json', '*filename*'. Optional param, matches all storables recursively if excluded. Either this, {nameof(fileContentRegex)}, or both must be included and non-empty.")] string[]? nameGlobs = null,
