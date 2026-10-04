@@ -490,11 +490,15 @@ public static class StorageTools
         }
     }
 
+    private const int FindAllBudgetBytes = 8 * 1024 - 192;          // shared pool for all match text (same 8KB ceiling as ranged reads)
+    private const int FindAllMinColumnsPerMatch = 256;              // minimum columns guaranteed per match before any match receives extra
+    private const int FindAllPerMatchOverheadBytes = 128;           // reserved per match for its truncation disclosure + JSON escaping
+
     [Description("Searches for files and folders by name patterns within a folder hierarchy. Uses depth-first recursive traversal. Supports glob patterns (e.g., '*.cs', 'src/**/*.json') for file/folder names and regex patterns for file content.")]
-    public static async Task<FindResultWithMatches[]> FindAll(
+    public static async Task<FindAllResult> FindAll(
         [Description("The ID of the folder to search within.")] string folderId,
         [Description($"Glob patterns to match against each single storable file/folder's name along a path (NOT full path itself), use '*' to match any or no chars, '?' for single char, or '**' for recursive directory match. Examples: '*.cs', 'test*', '**/*.json', '*foldername*'. Optional param, searches all storables recursively if excluded. Either this, {nameof(fileContentRegex)}, or both must be included and non-empty.")] string[]? nameGlobs = null,
-        [Description($"Regex pattern to search within file contents. Only files are content-searched. Matched lines are returned with line numbers. Optional param, surfaces storables but not content if excluded. Either this, {nameof(nameGlobs)} or both must be included and non-empty.")] string? fileContentRegex = null,
+        [Description($"Regex pattern to search within file contents. Only files are content-searched. Matched lines are returned with line numbers; match text shares an 8 KB pool across all results (each shown match at least 256 columns) and any truncation discloses a read_file_text_range startLine/startColumn resume. Optional param, surfaces storables but not content if excluded. Either this, {nameof(nameGlobs)} or both must be included and non-empty.")] string? fileContentRegex = null,
         [Description("What to filter for glob and regex matches: 'all' (default), 'file', or 'folder'. ")] string storableTypeToMatch = "all",
         [Description("Maximum number of results to return. Default 100.")] int maxResults = 100)
     {
@@ -557,9 +561,9 @@ public static class StorageTools
                 "folder" => StorableType.Folder,
                 _ => throw new McpException($"Invalid itemType '{storableTypeToMatch}'. Use 'all', 'file', or 'folder'.", McpErrorCode.InvalidParams)
             };
-
             var recursive = new DepthFirstRecursiveFolder(folder);
-            var results = new List<FindResultWithMatches>();
+            var entries = new List<FindAllEntry>();
+            var fileLimitHit = false;
 
             await foreach (var item in recursive.GetItemsAsync(storableType, cancellationToken))
             {
@@ -571,20 +575,23 @@ public static class StorageTools
                 string externalId = await ProtocolRegistry.SubstituteWithMountAliasAsync(item.Id, folderId);
                 await EnsureStorableRegistered(externalId, cancellationToken);
 
-                // Name filter
-                var skipIterationNoGlob = true;
-                foreach (var nameRegex in nameRegexes)
+                // Name filter (only when name globs were provided — an empty list means "no name constraint")
+                if (nameRegexes.Count > 0)
                 {
-                    // Only process storable if any provided nameGlobs match
-                    if (nameRegex.IsMatch(item.Name))
+                    var skipIterationNoGlob = true;
+                    foreach (var nameRegex in nameRegexes)
                     {
-                        skipIterationNoGlob = false;
-                        break;
+                        // Only process storable if any provided nameGlobs match
+                        if (nameRegex.IsMatch(item.Name))
+                        {
+                            skipIterationNoGlob = false;
+                            break;
+                        }
                     }
-                }
 
-                if (skipIterationNoGlob)
-                    continue;
+                    if (skipIterationNoGlob)
+                        continue;
+                }
 
                 var typeStr = item switch
                 {
@@ -604,18 +611,16 @@ public static class StorageTools
                         try { content = await file.ReadTextAsync(CancellationToken.None); }
                         finally { fileSem.Release(); }
                         var lines2 = content.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
-                        var matches = new List<ContentMatchLine>();
+                        var fileMatches = new List<PendingFindAllMatch>();
 
                         for (int i = 0; i < lines2.Length; i++)
                         {
                             if (fileContentRegexCompiled.IsMatch(lines2[i]))
-                                matches.Add(new ContentMatchLine(Line: i + 1, Text: lines2[i].TrimEnd()));
+                                fileMatches.Add(new PendingFindAllMatch(externalId, item.Name, i + 1, lines2[i].TrimEnd()));
                         }
 
-                        if (matches.Count == 0)
-                            continue;
-
-                        results.Add(new FindResultWithMatches(Id: externalId, Name: item.Name, Type: typeStr, Matches: matches.ToArray()));
+                        if (fileMatches.Count > 0)
+                            entries.Add(new FindAllEntry(new FindResultWithMatches(Id: externalId, Name: item.Name, Type: typeStr), fileMatches));
                     }
                     catch
                     {
@@ -628,14 +633,53 @@ public static class StorageTools
                 }
                 else
                 {
-                    results.Add(new FindResultWithMatches(Id: externalId, Name: item.Name, Type: typeStr));
+                    entries.Add(new FindAllEntry(new FindResultWithMatches(Id: externalId, Name: item.Name, Type: typeStr), null));
                 }
 
-                if (results.Count >= maxResults)
+                if (entries.Count >= maxResults)
+                {
+                    fileLimitHit = true;
                     break;
+                }
             }
 
-            return results.ToArray();
+            // Shared 8KB pool across all matches (starvation-proof), then regroup per file — traversal order preserved.
+            var pending = new List<PendingFindAllMatch>();
+            foreach (var entry in entries)
+                if (entry.Matches is not null)
+                    pending.AddRange(entry.Matches);
+
+            var (shownMatches, droppedMatches) = AllocateFindAllMatchBudget(pending);
+            var shownByKey = shownMatches.ToDictionary(a => (a.Match.FileId, a.Match.Line));
+
+            var finalResults = new List<FindResultWithMatches>(entries.Count);
+            foreach (var entry in entries)
+            {
+                if (entry.Matches is null)
+                {
+                    finalResults.Add(entry.Result);
+                    continue;
+                }
+
+                var shownForFile = new List<ContentMatchLine>();
+                foreach (var m in entry.Matches)
+                {
+                    if (shownByKey.TryGetValue((m.FileId, m.Line), out var allocated))
+                        shownForFile.Add(new ContentMatchLine(m.Line, allocated.Text));
+                }
+                if (shownForFile.Count > 0)
+                    finalResults.Add(new FindResultWithMatches(entry.Result.Id, entry.Result.Name, entry.Result.Type, Matches: shownForFile.ToArray()));
+            }
+
+            var notes = new List<string>();
+            if (droppedMatches > 0)
+            {
+                var lineLabel = droppedMatches == 1 ? "line" : "lines";
+                notes.Add($"{droppedMatches} matched {lineLabel} dropped to fit the {FindAllBudgetBytes}-byte pool — rerun with a narrower pattern to surface them");
+            }
+            if (fileLimitHit)
+                notes.Add($"Traversal stopped at {maxResults} results — more matches may exist; rerun with a higher maxResults or a narrower pattern");
+            return new FindAllResult(finalResults.ToArray(), notes.Count > 0 ? string.Join("; ", notes) + "." : null);
         }
         catch (McpException) { throw; }
         catch (Exception ex)
@@ -644,6 +688,57 @@ public static class StorageTools
         }
     }
 
+    private sealed record FindAllEntry(FindResultWithMatches Result, List<PendingFindAllMatch>? Matches);
+
+    private readonly record struct PendingFindAllMatch(string FileId, string FileName, int Line, string Text);
+
+    private readonly record struct AllocatedFindAllMatch(PendingFindAllMatch Match, string Text);
+
+    private static (AllocatedFindAllMatch[] Shown, int Dropped) AllocateFindAllMatchBudget(IReadOnlyList<PendingFindAllMatch> pending)
+    {
+        // Phase 1: secure a minimum for as many matches (in order) as the pool allows — a huge match can't starve a small one.
+        var secured = new List<(int Index, int MinBytes)>();
+        var used = 0;
+        for (var i = 0; i < pending.Count; i++)
+        {
+            var text = pending[i].Text;
+            var minCols = Math.Min(text.Length, FindAllMinColumnsPerMatch);
+            var minBytes = Encoding.UTF8.GetByteCount(text[..minCols]);
+            var cost = minBytes + FindAllPerMatchOverheadBytes;
+            if (used + cost > FindAllBudgetBytes) break;
+            secured.Add((i, minBytes));
+            used += cost;
+        }
+
+        // Phase 2: split the remainder evenly across secured matches (even, not proportional — no match may hog the pool).
+        var extra = secured.Count > 0 ? (FindAllBudgetBytes - used) / secured.Count : 0;
+
+        var shown = new List<AllocatedFindAllMatch>(secured.Count);
+        foreach (var (index, minBytes) in secured)
+        {
+            var text = pending[index].Text;
+            var span = text.AsSpan();
+            var target = minBytes + extra;
+            var cut = 0;
+            var bytes = 0;
+            while (cut < text.Length)
+            {
+                var charBytes = Encoding.UTF8.GetByteCount(span.Slice(cut, 1));
+                if (bytes + charBytes > target) break;
+                cut++;
+                bytes += charBytes;
+            }
+            if (cut > 0 && char.IsHighSurrogate(text[cut - 1]) && (cut >= text.Length || !char.IsLowSurrogate(text[cut])))
+                cut--; // never split a surrogate pair
+
+            var finalText = cut < text.Length
+                ? text[..cut] + $" […+{text.Length - cut} more columns on line {pending[index].Line} — resume with read_file_text_range: startLine {pending[index].Line}, startColumn {cut + 1}]"
+                : text;
+            shown.Add(new AllocatedFindAllMatch(pending[index], finalText));
+        }
+
+        return (shown.ToArray(), pending.Count - shown.Count);
+    }
     /// <summary>
     /// Converts a glob pattern to a regex pattern.
     /// Supports: * (any chars except separator), ? (single char), **/ (recursive directory match).
@@ -799,55 +894,10 @@ public static class StorageTools
         }
     }
 
-    private const int ReadFileAsTextDefaultMaxLines = 100;
-    private const int ReadFileAsTextDefaultMaxColumns = 256;
-
-    private static string ApplyDefaultReadFileAsTextTruncation(string content)
-    {
-        var lines = content.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
-        var selectedLineCount = Math.Min(lines.Length, ReadFileAsTextDefaultMaxLines);
-        var selectedLines = new string[selectedLineCount];
-        var lineCountTruncated = lines.Length > ReadFileAsTextDefaultMaxLines;
-        var columnTruncationDetails = new List<string>();
-
-        for (int i = 0; i < selectedLineCount; i++)
-        {
-            var line = lines[i];
-
-            if (line.Length > ReadFileAsTextDefaultMaxColumns)
-            {
-                selectedLines[i] = line[..ReadFileAsTextDefaultMaxColumns];
-                var excludedColumns = line.Length - ReadFileAsTextDefaultMaxColumns;
-                var columnLabel = excludedColumns == 1 ? "column" : "columns";
-                columnTruncationDetails.Add($"{excludedColumns} {columnLabel} on line {i + 1}");
-            }
-            else
-            {
-                selectedLines[i] = line;
-            }
-        }
-
-        if (!lineCountTruncated && columnTruncationDetails.Count == 0)
-            return content;
-
-        var excludedLineCount = Math.Max(0, lines.Length - selectedLineCount);
-        var truncationParts = new List<string>();
-        if (excludedLineCount > 0)
-        {
-            var lineLabel = excludedLineCount == 1 ? "line" : "lines";
-            truncationParts.Add($"{excludedLineCount} {lineLabel}");
-        }
-        if (columnTruncationDetails.Count > 0)
-            truncationParts.Add(string.Join(", ", columnTruncationDetails));
-
-        return string.Join('\n', selectedLines)
-            + $"\n\n[Output truncated, excluded {string.Join(", ", truncationParts)}. Use read_file_text_range for larger or more precise reads.]";
-    }
-
     private const int ReadFileTextRangeMaxBytes = 8 * 1024 - 192; // 8 KB minus overhead for truncation message
 
     [Description("Reads file text from http, https, local storage, memory, ipfs, ipns, mfs, and all other supported protocols. Max 8KB reads per call, tool result tells you where to resume if truncated.")]
-    public static async Task<string> ReadFileTextRange([Description("The ID of the file to read.")] string fileId, [Description("1-based indexing.")] int startLine, [Description("Omit this to read to end of file. Prefer including when known.")] int? endLine = null, int? columnLimit = ReadFileTextRangeMaxBytes, [Description("Set true to prefix each line content with its exact line number as [LX]. Disable when only gist is being read rather than verbatim details being read/written.")] bool prefixLineNumbers = true)
+    public static async Task<string> ReadFileTextRange([Description("The ID of the file to read.")] string fileId, [Description("1-based indexing.")] int startLine, [Description("Omit this to read to end of file. Prefer including when known.")] int? endLine = null, [Description("1-based content column to start reading from, on the first line of the range only. Subsequent lines read from column 1. Default 1. The first line's read window is [startColumn, startColumn + columnLimit).")] int startColumn = 1, [Description("Number of content columns to read per line, measured from the line's start column (startColumn on the first line, 1 on the rest). Omit or null to disable the limit.")] int? columnLimit = ReadFileTextRangeMaxBytes, [Description("Set true to prefix each line content with its exact line number as [LX]. Disable when only gist is being read rather than verbatim details being read/written.")] bool prefixLineNumbers = true)
     {
         var cancellationToken = CancellationToken.None;
         try
@@ -876,6 +926,10 @@ public static class StorageTools
             if (startLine < 1 || startLine > lines.Length)
                 throw new McpException($"Invalid startLine: {startLine}. Stop blindly reading and use get_storable_info upfront for line count. Must be between 1 and {lines.Length} (file '{file.Name}' has {lines.Length} lines)", McpErrorCode.InvalidParams);
 
+            // Validate startColumn (1-based; one past the line's end is a valid resume position)
+            if (startColumn < 1 || startColumn > lines[startLine - 1].Length + 1)
+                throw new McpException($"Invalid startColumn: {startColumn}. Must be between 1 and {lines[startLine - 1].Length + 1} (line {startLine} of file '{file.Name}' has {lines[startLine - 1].Length} columns).", McpErrorCode.InvalidParams);
+
             int actualEndLine = endLine ?? lines.Length;
             if (actualEndLine < startLine || actualEndLine > lines.Length)
                 throw new McpException($"Invalid endLine: {actualEndLine}. Must be between {startLine} and {lines.Length} (file '{file.Name}' has {lines.Length} lines). Stop blindly reading and use get_storable_info upfront for line count.", McpErrorCode.InvalidParams);
@@ -883,7 +937,19 @@ public static class StorageTools
             // Extract the requested range (convert to 0-based indexing)
             var selectedLines = lines[(startLine - 1)..actualEndLine];
 
-            // Prefix line numbers if requested
+            // Apply per-line read window: [startColumn, startColumn + columnLimit) on the first line, [1, columnLimit) on the rest.
+            if (columnLimit is int maxCols)
+            {
+                for (int i = 0; i < selectedLines.Length; i++)
+                {
+                    var line = selectedLines[i];
+                    int from = (i == 0 ? startColumn : 1) - 1; // 0-based
+                    int to = Math.Min(line.Length, from + maxCols);
+                    selectedLines[i] = (from < to) ? line.Substring(from, to - from) : "";
+                }
+            }
+
+            // Prefix line numbers if requested (after windowing, so columns refer to content, not the prefix)
             if (prefixLineNumbers)
             {
                 for (int i = 0; i < selectedLines.Length; i++)
@@ -893,40 +959,38 @@ public static class StorageTools
                 }
             }
 
-            // Apply per-line column limit if specified
-            if (columnLimit is int maxCols)
-            {
-                for (int i = 0; i < selectedLines.Length; i++)
-                {
-                    var line = selectedLines[i];
-                    if (line.Length > maxCols)
-                    {
-                        selectedLines[i] = line.Substring(0, maxCols);
-                    }
-                }
-            }
-
             var result = string.Join('\n', selectedLines);
 
-            if (Encoding.UTF8.GetByteCount(result) > ReadFileTextRangeMaxBytes)
+            if (Encoding.UTF8.GetByteCount(result) <= ReadFileTextRangeMaxBytes)
+                return result;
+
+            // Trim lines until we're under the limit
+            int keep = selectedLines.Length;
+            while (keep > 1)
             {
-                // Trim lines until we're under the limit
-                int keep = selectedLines.Length;
-                while (keep > 0)
+                var trimmed = string.Join('\n', selectedLines[..keep]);
+                if (Encoding.UTF8.GetByteCount(trimmed) <= ReadFileTextRangeMaxBytes)
                 {
-                    var trimmed = string.Join('\n', selectedLines[..keep]);
-                    if (Encoding.UTF8.GetByteCount(trimmed) <= ReadFileTextRangeMaxBytes)
-                    {
-                        var excludedLines = actualEndLine - (startLine - 1 + keep);
-                        return trimmed
-                            + $"\n\n[Output truncated to {ReadFileTextRangeMaxBytes} bytes. "
-                            + $"{excludedLines} lines excluded from requested range. Read from startLine {startLine + keep} to continue.]";
-                    }
-                    keep--;
+                    var excludedLines = actualEndLine - (startLine - 1 + keep);
+                    return trimmed
+                        + $"\n\n[Output truncated to {ReadFileTextRangeMaxBytes} bytes. "
+                        + $"{excludedLines} lines excluded from requested range. Read from startLine {startLine + keep} to continue.]";
                 }
+                keep--;
             }
 
-            return result;
+            // Even the first line alone exceeds the limit: hard-cut it by UTF-8 bytes (after the [LX]
+            // prefix, if any) and disclose a (startLine, startColumn) resume position into it.
+            var firstLine = selectedLines[0];
+            int contentOffset = prefixLineNumbers ? firstLine.IndexOf(']') + 1 : 0;
+            var firstContent = firstLine[contentOffset..];
+            var bytes = Encoding.UTF8.GetBytes(firstContent);
+            int cut = Math.Min(bytes.Length, ReadFileTextRangeMaxBytes - 256 - contentOffset);
+            while (cut > 0 && (bytes[cut] & 0xC0) == 0x80) cut--; // back off to a char boundary
+            var cutContent = Encoding.UTF8.GetString(bytes[..cut]);
+            return firstLine[..contentOffset] + cutContent
+                + $"\n\n[Output truncated to {ReadFileTextRangeMaxBytes} bytes: line {startLine} alone exceeds the limit, the line above is a partial view. "
+                + $"Read from startLine {startLine}, startColumn {cutContent.Length + 1} to continue — the file contains the complete line.]";
         }
         catch (McpException)
         {

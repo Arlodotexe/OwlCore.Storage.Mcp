@@ -550,15 +550,16 @@ public static class FileLauncherTool
         }
 
         // Even line 1 alone exceeds the limit: hard-cut it by UTF-8 bytes and point at the
-        // persisted file from line 1, which holds the complete line.
+        // persisted file from line 1, column after the cut — which holds the complete line.
         int messageBudget = 256;
         var bytes = Encoding.UTF8.GetBytes(lines[0]);
         int cut = Math.Min(bytes.Length, StartStdioRangeMaxBytes - messageBudget);
         while (cut > 0 && (bytes[cut] & 0xC0) == 0x80) cut--; // back off to a char boundary
         var prefix = Encoding.UTF8.GetString(bytes[..cut]);
+        var resumeColumn = prefix.Length + 1; // 1-based column: first char after the inline partial view
         return prefix
             + $"\n\n[Output truncated to {StartStdioRangeMaxBytes} bytes: line 1 alone exceeds the limit, the line above is a partial view. "
-            + $"Read fileId `{fullPersistedFileId}` (`./{trimmedContentKind}` in folderId `{processRunRelPathDir}`) from startLine 1 to continue — the persisted file contains the complete line.]";
+            + $"Read fileId `{fullPersistedFileId}` (`./{trimmedContentKind}` in folderId `{processRunRelPathDir}`) from startLine 1, startColumn {resumeColumn} to continue — the persisted file contains the complete line.]";
     }
 
     private static async Task RegisterStorableAsync(IStorable storable)

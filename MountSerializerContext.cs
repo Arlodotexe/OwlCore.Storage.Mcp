@@ -30,6 +30,7 @@ namespace OwlCore.Storage.Mcp;
 [JsonSerializable(typeof(ContentMatchLine))]
 [JsonSerializable(typeof(ContentMatchLine[]))]
 [JsonSerializable(typeof(FindResultWithMatches))]
+[JsonSerializable(typeof(FindAllResult))]
 [JsonSerializable(typeof(FindResultWithMatches[]))]
 [JsonSerializable(typeof(LaunchResult))]
 [JsonSerializable(typeof(ExecuteResult))]
