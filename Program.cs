@@ -529,28 +529,36 @@ public static class FileLauncherTool
     {
         var lines = content.Split(["\r\n", "\r", "\n"], StringSplitOptions.None);
         var result = string.Join('\n', lines);
-        var startLine = 1;
         var endLine = lines.Length;
 
-        if (Encoding.UTF8.GetByteCount(result) > StartStdioRangeMaxBytes)
+        if (Encoding.UTF8.GetByteCount(result) <= StartStdioRangeMaxBytes)
+            return result;
+
+        // Trim lines until we're under the limit
+        int keep = lines.Length;
+        while (keep > 1)
         {
-            // Trim lines until we're under the limit
-            int keep = lines.Length;
-            while (keep > 0)
+            var trimmed = string.Join('\n', lines[..keep]);
+            if (Encoding.UTF8.GetByteCount(trimmed) <= StartStdioRangeMaxBytes)
             {
-                var trimmed = string.Join('\n', lines[..keep]);
-                if (Encoding.UTF8.GetByteCount(trimmed) <= StartStdioRangeMaxBytes)
-                {
-                    var excludedLines = endLine - (startLine - 1 + keep);
-                    return trimmed
-                        + $"\n\n[Output truncated to {StartStdioRangeMaxBytes} bytes. "
-                        + $"{excludedLines} lines excluded from requested range. Read fileId `{fullPersistedFileId}` (`./{trimmedContentKind}` in folderId `{processRunRelPathDir}`) from startLine {startLine + keep} to continue.]";
-                }
-                keep--;
+                var excludedLines = endLine - keep;
+                return trimmed
+                    + $"\n\n[Output truncated to {StartStdioRangeMaxBytes} bytes. "
+                    + $"{excludedLines} lines excluded. Read fileId `{fullPersistedFileId}` (`./{trimmedContentKind}` in folderId `{processRunRelPathDir}`) from startLine {keep + 1} to continue.]";
             }
+            keep--;
         }
 
-        return result;
+        // Even line 1 alone exceeds the limit: hard-cut it by UTF-8 bytes and point at the
+        // persisted file from line 1, which holds the complete line.
+        int messageBudget = 256;
+        var bytes = Encoding.UTF8.GetBytes(lines[0]);
+        int cut = Math.Min(bytes.Length, StartStdioRangeMaxBytes - messageBudget);
+        while (cut > 0 && (bytes[cut] & 0xC0) == 0x80) cut--; // back off to a char boundary
+        var prefix = Encoding.UTF8.GetString(bytes[..cut]);
+        return prefix
+            + $"\n\n[Output truncated to {StartStdioRangeMaxBytes} bytes: line 1 alone exceeds the limit, the line above is a partial view. "
+            + $"Read fileId `{fullPersistedFileId}` (`./{trimmedContentKind}` in folderId `{processRunRelPathDir}`) from startLine 1 to continue — the persisted file contains the complete line.]";
     }
 
     private static async Task RegisterStorableAsync(IStorable storable)
