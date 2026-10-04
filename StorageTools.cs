@@ -522,7 +522,8 @@ public static class StorageTools
 
             if (registeredItem is IFile)
                 throw new McpException($"Provided folderId value '{folderId}' resolves to a file, not a folder. Must be a folder", McpErrorCode.InvalidParams);
-            else if (registeredItem is not IFolder folder)
+            
+            if (registeredItem is not IFolder folder)
                 throw new McpException($"Provided folderId '{folderId}' is not a folder", McpErrorCode.InvalidParams);
 
             // Build name glob regex (provided = must contain at least one non-empty pattern; empty entries are invalid)
