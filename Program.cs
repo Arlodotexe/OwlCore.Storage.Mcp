@@ -415,13 +415,35 @@ public static class FileLauncherTool
             if (process == null)
                 throw new McpException($"Failed to start process: '{fileId}'", McpErrorCode.InternalError);
 
+            // Setup to persist process stdio to memory
+            await StorageTools.EnsureStorableRegistered("memory://", default);
+            var memoryRoot = (MemoryFolder?)StorageTools._storableRegistry["memory://"];
+            Guard.IsNotNull(memoryRoot);
+
+            var createPathItems = memoryRoot.CreateFoldersAlongRelativePathAsync($"./tools/start/{process.Id}/", default, default);
+            MemoryFolder? thisProcessRunDir = null;
+            await foreach (MemoryFolder item in createPathItems)
+            {
+                // Register new folders along relative path
+                // copied code from GetFolderItems
+                await RegisterStorableAsync(item);
+
+                // Get last item in chain (at loop end)
+                thisProcessRunDir = item;
+            }
+            Guard.IsNotNull(thisProcessRunDir);
+
+            // Stdio handling
             if (processStdin != null)
                 await process.StandardInput.WriteAsync(processStdin);
 
             process.StandardInput.Close();
 
-            var stdoutTask = process.StandardOutput.ReadToEndAsync();
-            var stderrTask = process.StandardError.ReadToEndAsync();
+            var stdoutSourceFile = new StreamFile(process.StandardOutput.BaseStream) { ShouldDispose = true };
+            var stdoutTask = thisProcessRunDir.CreateCopyOfAsync(stdoutSourceFile, overwrite: true, "stdout", default);
+
+            var stderrSourceFile = new StreamFile(process.StandardError.BaseStream) { ShouldDispose = true };
+            var stderrTask = thisProcessRunDir.CreateCopyOfAsync(stderrSourceFile, overwrite: true, "stderr", default);
 
             var processCompletionTask = Task.WhenAll(stdoutTask, stderrTask, process.WaitForExitAsync());
             var timedOut = await Task.WhenAny(processCompletionTask, Task.Delay(processStartTimeoutMs)) != processCompletionTask;
@@ -443,45 +465,23 @@ public static class FileLauncherTool
             {
                 await processCompletionTask;
             }
-
-            var stdout = stdoutTask.IsCompletedSuccessfully ? stdoutTask.Result : null;
-            var stderr = stderrTask.IsCompletedSuccessfully ? stderrTask.Result : null;
-
-            // Persist process stdio to memory
-            await StorageTools.EnsureStorableRegistered("memory://", default);
-            var memoryRoot = (MemoryFolder?)StorageTools._storableRegistry["memory://"];
-            Guard.IsNotNull(memoryRoot);
-
-            var createPathItems = memoryRoot.CreateFoldersAlongRelativePathAsync($"./tools/start/{process.Id}/", default, default);
-            MemoryFolder? thisProcessRunDir = null;
-            await foreach (MemoryFolder item in createPathItems)
-            {
-                // Register new folders along relative path
-                // copied code from GetFolderItems
-                await RegisterStorableAsync(item);
-
-                // Get last item in chain (at loop end)
-                thisProcessRunDir = item;
-            }
-            Guard.IsNotNull(thisProcessRunDir);
+            
+            var stdoutFile = await stdoutTask;
+            var stdout = stdoutTask.IsCompletedSuccessfully ? await stdoutFile.ReadTextAsync() : null;
+            
+            var stderrFile = await stderrTask;
+            var stderr = stderrTask.IsCompletedSuccessfully ? await stderrFile.ReadTextAsync() : null;
 
             var stdinFile = await thisProcessRunDir.CreateFileAsync("stdin", overwrite: true, default);
-            var stdoutFile = await thisProcessRunDir.CreateFileAsync("stdout", overwrite: true, default);
-            var stderrFile = await thisProcessRunDir.CreateFileAsync("stderr", overwrite: true, default);
+
             var cwdFile = await thisProcessRunDir.CreateFileAsync("cwd", overwrite: true, default);
             var binaryPathFile = await thisProcessRunDir.CreateFileAsync("bin", overwrite: true, default);
             var argumentsFile = await thisProcessRunDir.CreateFileAsync("args", overwrite: true, default);
             
-            await new IStorable[] {stdinFile, stdoutFile, stderrFile, cwdFile, binaryPathFile, argumentsFile}.InParallel(RegisterStorableAsync);
+            await new IStorable[] {stdinFile, cwdFile, binaryPathFile, argumentsFile}.InParallel(RegisterStorableAsync);
 
             if (processStdin is not null)
                 await stdinFile.WriteTextAsync(processStdin);
-
-            if (stdout is not null)
-                await stdoutFile.WriteTextAsync(stdout, default);
-
-            if (stderr is not null)
-                await stderrFile.WriteTextAsync(stderr, default);
 
             if (psi.WorkingDirectory is not null)
                 await cwdFile.WriteTextAsync(psi.WorkingDirectory, default);
