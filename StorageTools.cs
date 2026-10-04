@@ -575,19 +575,14 @@ public static class StorageTools
                 "folder" => StorableType.Folder,
                 _ => throw new McpException($"Invalid itemType '{storableTypeToMatch}'. Use 'all', 'file', or 'folder'.", McpErrorCode.InvalidParams)
             };
-            var recursive = new DepthFirstRecursiveFolder(folder);
+
             var entries = new List<FindEntry>();
             var fileLimitHit = false;
 
-            await foreach (var item in recursive.GetItemsAsync(storableType, cancellationToken))
+            await foreach (var item in new DepthFirstRecursiveFolder(folder).GetItemsAsync(storableType, cancellationToken))
             {
-                // Register the item using its real ID — unlike flat folder listings,
-                // recursive results may be many levels deep, so we can't assume parentId == folderId.
-                _storableRegistry[item.Id] = item;
-                await EnsureStorableRegistered(item.Id, cancellationToken);
-
-                string externalId = await ProtocolRegistry.SubstituteWithMountAliasAsync(item.Id, folderId);
-                await EnsureStorableRegistered(externalId, cancellationToken);
+                // Register the item using its real ID
+                var externalId = await RegisterStorableAsync(item);
 
                 // Name filter (only when name globs were provided — an empty list means "no name constraint")
                 if (nameRegexes.Count > 0)
@@ -700,6 +695,18 @@ public static class StorageTools
         {
             throw new McpException($"Failed to search in '{folderId}': {ex.Message}", ex, McpErrorCode.InternalError);
         }
+    }
+
+    private static async Task<string> RegisterStorableAsync(IStorable storable)
+    {
+        string itemId = ProtocolRegistry.IsCustomProtocol(storable.Id) ? StorageTools.CreateCustomItemId(storable.Id, storable.Name) : storable.Id;
+        StorageTools._storableRegistry[itemId] = storable;
+        string externalId = await ProtocolRegistry.SubstituteWithMountAliasAsync(itemId, storable.Id);
+        if (externalId != itemId)
+            StorageTools._storableRegistry[externalId] = storable;
+        externalId = StorageTools.NormalizeOutboundAliasId(externalId, storable);
+        StorageTools._storableRegistry[externalId] = storable;
+        return externalId;
     }
 
     private sealed record FindEntry(FindResultWithMatches Result, List<PendingFindMatch>? Matches);
