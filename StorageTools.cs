@@ -517,8 +517,13 @@ public static class StorageTools
             folderId = NormalizeInboundExternalId(folderId);
             await EnsureStorableRegistered(folderId, cancellationToken);
 
-            if (!_storableRegistry.TryGetValue(folderId, out var registeredItem) || registeredItem is not IFolder folder)
+            if (!_storableRegistry.TryGetValue(folderId, out var registeredItem))
                 throw new McpException($"Folder with ID '{folderId}' not found", McpErrorCode.InvalidParams);
+
+            if (registeredItem is IFile)
+                throw new McpException($"Provided folderId value '{folderId}' resolves to a file, not a folder. Must be a folder", McpErrorCode.InvalidParams);
+            else if (registeredItem is not IFolder folder)
+                throw new McpException($"Provided folderId '{folderId}' is not a folder", McpErrorCode.InvalidParams);
 
             // Build name glob regex (provided = must contain at least one non-empty pattern; empty entries are invalid)
             List<Regex> nameRegexes = new();
