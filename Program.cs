@@ -21,6 +21,7 @@ using Ipfs;
 using Ipfs.CoreApi;
 using CommunityToolkit.Diagnostics;
 using System.Runtime.InteropServices;
+using OwlCore.Storage.Memory;
 
 var startTime = DateTime.Now;
 
@@ -371,6 +372,7 @@ public static class FileLauncherTool
                     throw new McpException($"Failed to open: '{fileId}'", McpErrorCode.InternalError);
 
                 return new StartResult(
+                    Pid: shellProcess.Id,
                     Mode: fileIdStartMode.ToString(),
                     Started: true,
                     Message: $"Opened '{fileId}' with default application."
@@ -445,24 +447,70 @@ public static class FileLauncherTool
             var stdout = stdoutTask.IsCompletedSuccessfully ? stdoutTask.Result : null;
             var stderr = stderrTask.IsCompletedSuccessfully ? stderrTask.Result : null;
 
+            // Persist process stdio to memory
+            await StorageTools.EnsureStorableRegistered("memory://", default);
+            var memoryRoot = (MemoryFolder?)StorageTools._storableRegistry["memory://"];
+            Guard.IsNotNull(memoryRoot);
+
+            var createPathItems = memoryRoot.CreateFoldersAlongRelativePathAsync($"./tools/start/{process.Id}/", default, default);
+            MemoryFolder? thisProcessRunDir = null;
+            await foreach (MemoryFolder item in createPathItems)
+            {
+                // Register new folders along relative path
+                // copied code from GetFolderItems
+                await RegisterStorableAsync(item);
+
+                // Get last item in chain (at loop end)
+                thisProcessRunDir = item;
+            }
+            Guard.IsNotNull(thisProcessRunDir);
+
+            var stdinFile = await thisProcessRunDir.CreateFileAsync("stdin", overwrite: true, default);
+            var stdoutFile = await thisProcessRunDir.CreateFileAsync("stdout", overwrite: true, default);
+            var stderrFile = await thisProcessRunDir.CreateFileAsync("stderr", overwrite: true, default);
+            var cwdFile = await thisProcessRunDir.CreateFileAsync("cwd", overwrite: true, default);
+            var binaryPathFile = await thisProcessRunDir.CreateFileAsync("bin", overwrite: true, default);
+            var argumentsFile = await thisProcessRunDir.CreateFileAsync("args", overwrite: true, default);
+            
+            await new IStorable[] {stdinFile, stdoutFile, stderrFile, cwdFile, binaryPathFile, argumentsFile}.InParallel(RegisterStorableAsync);
+
+            if (processStdin is not null)
+                await stdinFile.WriteTextAsync(processStdin);
+
+            if (stdout is not null)
+                await stdoutFile.WriteTextAsync(stdout, default);
+
+            if (stderr is not null)
+                await stderrFile.WriteTextAsync(stderr, default);
+
+            if (psi.WorkingDirectory is not null)
+                await cwdFile.WriteTextAsync(psi.WorkingDirectory, default);
+
+            await binaryPathFile.WriteTextAsync(psi.FileName, default);
+            await argumentsFile.WriteTextAsync(psi.Arguments, default);
+
             if (timedOut)
             {
                 return new StartResult(
+                    Pid: process.Id,
                     Mode: fileIdStartMode.ToString(),
                     ExitCode: -1,
-                    Stdout: stdout,
-                    Stderr: stderr,
+                    Stdout: string.IsNullOrEmpty(stdout) ? null : TrimToMaxByteLength(stdout, thisProcessRunDir.Id, "stdout", stdoutFile.Id),
+                    Stderr: string.IsNullOrEmpty(stderr) ? null : TrimToMaxByteLength(stderr, thisProcessRunDir.Id, "stderr", stderrFile.Id),
                     TimedOut: true,
-                    Error: $"Process timed out after {processStartTimeoutMs}ms and was killed."
+                    Error: $"Process timed out after {processStartTimeoutMs}ms and was killed.",
+                    ProcessStdioMemoryPersistFolderId: thisProcessRunDir.Id
                 );
             }
 
             return new StartResult(
+                Pid: process.Id,
                 Mode: fileIdStartMode.ToString(),
                 ExitCode: process.ExitCode,
-                Stdout: stdout,
-                Stderr: string.IsNullOrEmpty(stderr) ? null : stderr,
-                TimedOut: false
+                Stdout: string.IsNullOrEmpty(stdout) ? null : TrimToMaxByteLength(stdout, thisProcessRunDir.Id, "stdout", stdoutFile.Id),
+                Stderr: string.IsNullOrEmpty(stderr) ? null : TrimToMaxByteLength(stderr, thisProcessRunDir.Id, "stderr", stderrFile.Id),
+                TimedOut: false,
+                ProcessStdioMemoryPersistFolderId: thisProcessRunDir.Id
             );
         }
         catch (McpException)
@@ -473,6 +521,47 @@ public static class FileLauncherTool
         {
             throw new McpException($"Failed to start file '{fileId}': {ex.Message}", ex, McpErrorCode.InternalError);
         }
+    }
+
+
+    private const int StartStdioRangeMaxBytes = 4 * 1024 - 192; // 8 KB divided by two (stderr+stdout) minus overhead for truncation message
+    private static string TrimToMaxByteLength(string content, string processRunRelPathDir, string trimmedContentKind, string fullPersistedFileId)
+    {
+        var lines = content.Split(["\r\n", "\r", "\n"], StringSplitOptions.None);
+        var result = string.Join('\n', lines);
+        var startLine = 1;
+        var endLine = lines.Length;
+
+        if (Encoding.UTF8.GetByteCount(result) > StartStdioRangeMaxBytes)
+        {
+            // Trim lines until we're under the limit
+            int keep = lines.Length;
+            while (keep > 0)
+            {
+                var trimmed = string.Join('\n', lines[..keep]);
+                if (Encoding.UTF8.GetByteCount(trimmed) <= StartStdioRangeMaxBytes)
+                {
+                    var excludedLines = endLine - (startLine - 1 + keep);
+                    return trimmed
+                        + $"\n\n[Output truncated to {StartStdioRangeMaxBytes} bytes. "
+                        + $"{excludedLines} lines excluded from requested range. Read fileId `{fullPersistedFileId}` (`./{trimmedContentKind}` in folderId `{processRunRelPathDir}`) from startLine {startLine + keep} to continue.]";
+                }
+                keep--;
+            }
+        }
+
+        return result;
+    }
+
+    private static async Task RegisterStorableAsync(IStorable storable)
+    {
+        string itemId = ProtocolRegistry.IsCustomProtocol(storable.Id) ? StorageTools.CreateCustomItemId(storable.Id, storable.Name) : storable.Id;
+        StorageTools._storableRegistry[itemId] = storable;
+        string externalId = await ProtocolRegistry.SubstituteWithMountAliasAsync(itemId, storable.Id);
+        if (externalId != itemId)
+            StorageTools._storableRegistry[externalId] = storable;
+        externalId = StorageTools.NormalizeOutboundAliasId(externalId, storable);
+        StorageTools._storableRegistry[externalId] = storable;
     }
 }
 

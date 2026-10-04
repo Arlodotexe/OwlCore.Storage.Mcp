@@ -34,7 +34,7 @@ public record LaunchResult(bool Started, string Mode, string Message);
 
 public record ExecuteResult(int ExitCode, string Stdout, string? Stderr, bool TimedOut, string? Error = null);
 
-public record StartResult(string Mode, bool? Started = null, string? Message = null, int? ExitCode = null, string? Stdout = null, string? Stderr = null, bool? TimedOut = null, string? Error = null);
+public record StartResult(string Mode, int Pid, bool? Started = null, string? Message = null, int? ExitCode = null, string? Stdout = null, string? Stderr = null, bool? TimedOut = null, string? Error = null, string? ProcessStdioMemoryPersistFolderId = null);
 
 public record MountedFolderInfo(string ProtocolScheme, string MountName, string RootUri, string FolderType, string MountType, string OriginalId);
 
