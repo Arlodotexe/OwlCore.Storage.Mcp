@@ -564,6 +564,7 @@ public static class FileLauncherTool
 
     private static async Task RegisterStorableAsync(IStorable storable)
     {
+        StorageTools._storableRegistry[storable.Id] = storable;
         string itemId = ProtocolRegistry.IsCustomProtocol(storable.Id) ? StorageTools.CreateCustomItemId(storable.Id, storable.Name) : storable.Id;
         StorageTools._storableRegistry[itemId] = storable;
         string externalId = await ProtocolRegistry.SubstituteWithMountAliasAsync(itemId, storable.Id);
