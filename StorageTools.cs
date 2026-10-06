@@ -925,8 +925,11 @@ public static class StorageTools
         {
             await EnsureStorableRegistered(fileId, cancellationToken);
 
-            if (!_storableRegistry.TryGetValue(fileId, out var item) || item is not IFile file)
+            if (!_storableRegistry.TryGetValue(fileId, out var item))
                 throw new McpException($"File with ID '{fileId}' not found", McpErrorCode.InvalidParams);
+
+            if (item is not IFile file)
+                throw new McpException($"Provided ID '{fileId}' is not a file.", McpErrorCode.InvalidParams);
 
             // Explicitly reject endLine of 0 since it's invalid (1-based indexing)
             if (endLine.HasValue && endLine.Value <= 0)
