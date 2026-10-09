@@ -331,7 +331,7 @@ public static class StorageTools
     }
 
     [Description("Gets the available browseable drives, both system and mounted. Use these drive IDs as starting points for GetItemByRelativePath navigation.")]
-    public static async Task<DriveInfoResult[]> GetAvailableDrives()
+    public static async Task<DriveInfoResult[]> Drives()
     {
         var driveInfos = new List<DriveInfoResult>();
         var cancellationToken = CancellationToken.None;
@@ -440,8 +440,8 @@ public static class StorageTools
         return driveInfos.ToArray();
     }
 
-    [Description($"Lists all items in a folder by ID or path. Returns array of items with their IDs, names, and types. Prefer {nameof(GetItemByRelativePath)} for hierarchical or path-based navigation.")]
-    public static async Task<PaginatedItemsResult> GetFolderItems(string folderId, [Description("Maximum number of results to return. Default 50.")] int maxResults = 50, [Description("Number of items to skip for pagination. Default 0.")] int skip = 0)
+    [Description($"Lists all items in a folder by ID or path. Returns array of items with their IDs, names, and types. Prefer {nameof(Navigate)} for hierarchical or path-based navigation.")]
+    public static async Task<PaginatedItemsResult> List(string folderId, [Description("Maximum number of results to return. Default 50.")] int maxResults = 50, [Description("Number of items to skip for pagination. Default 0.")] int skip = 0)
     {
         var cancellationToken = CancellationToken.None;
 
@@ -498,7 +498,7 @@ public static class StorageTools
     public static async Task<FindResult> Find(
         [Description("The ID of the folder to search within.")] string folderId,
         [Description($"Glob patterns to match against each single storable file/folder's name along a path (NOT full path itself), use '*' to match any or no chars, '?' for single char, or '**' for recursive directory match. Examples: '*.cs', 'test*', '**/*.json', '*foldername*'. Optional param, searches all storables recursively if omitted (empty strings are invalid — omit the parameter instead). Either this, {nameof(fileContentRegex)}, or both must be included and non-empty.")] string[]? nameGlobs = null,
-        [Description($"Regex pattern to search within file contents. Only files are content-searched. Matched lines are returned with line numbers; match text shares an 8 KB pool across all results (each shown match at least 256 columns) and any truncation discloses a read_file_text_range startLine/startColumn resume. Optional param, surfaces storables but not content if omitted (empty strings are invalid — omit the parameter instead). Either this, {nameof(nameGlobs)} or both must be included and non-empty.")] string? fileContentRegex = null,
+        [Description($"Regex pattern to search within file contents. Only files are content-searched. Matched lines are returned with line numbers; match text shares an 8 KB pool across all results (each shown match at least 256 columns) and any truncation discloses a read startLine/startColumn resume. Optional param, surfaces storables but not content if omitted (empty strings are invalid — omit the parameter instead). Either this, {nameof(nameGlobs)} or both must be included and non-empty.")] string? fileContentRegex = null,
         [Description("What to filter for glob and regex matches: 'all' (default), 'file', or 'folder'. ")] string storableTypeToMatch = "all",
         [Description("Maximum number of results to return. Default 100.")] int maxResults = 100)
     {
@@ -753,7 +753,7 @@ public static class StorageTools
                 cut--; // never split a surrogate pair
 
             var finalText = cut < text.Length
-                ? text[..cut] + $" […+{text.Length - cut} more columns on line {pending[index].Line} — resume with read_file_text_range: startLine {pending[index].Line}, startColumn {cut + 1}]"
+                ? text[..cut] + $" […+{text.Length - cut} more columns on line {pending[index].Line} — resume with read: startLine {pending[index].Line}, startColumn {cut + 1}]"
                 : text;
             shown.Add(new AllocatedFindMatch(pending[index], finalText));
         }
@@ -804,8 +804,8 @@ public static class StorageTools
         return sb.ToString();
     }
 
-    [Description("Navigates to an item using a relative path from a starting item id or alias. Accepts both forward and backslashes.")]
-    public static async Task<StorableItemResult> GetItemByRelativePath(string startingItemId, string relativePath)
+    [Description("Navigates to and gets an item using a relative path from a starting item id or alias. Accepts both forward and backslashes.")]
+    public static async Task<StorableItemResult> Navigate(string startingItemId, string relativePath)
     {
         var cancellationToken = CancellationToken.None;
         try
@@ -821,7 +821,7 @@ public static class StorageTools
 
             if (!_storableRegistry.TryGetValue(startingItemId, out var startingItem))
             {
-                var availableDrives = await GetAvailableDrives();
+                var availableDrives = await Drives();
                 var driveList = string.Join(", ", availableDrives.Select(d => $"'{d.Id}'"));
                 throw new McpException($"Starting item with ID '{startingItemId}' not found. For new navigation, use drive roots from GetAvailableDrives(): {driveList}", McpErrorCode.InvalidParams);
             }
@@ -874,7 +874,7 @@ public static class StorageTools
     }
 
     [Description("Gets a relative path from a folder to a child item and registers the chain along that path.")]
-    public static async Task<string> GetRelativePath(string fromFolderId, string toItemId)
+    public static async Task<string> Trace(string fromFolderId, string toItemId)
     {
         var cancellationToken = CancellationToken.None;
         try
@@ -918,7 +918,7 @@ public static class StorageTools
     private const int ReadFileTextRangeMaxBytes = 8 * 1024 - 192; // 8 KB minus overhead for truncation message
 
     [Description("Reads file text from http, https, local storage, memory, ipfs, ipns, mfs, and all other supported protocols. Max 8KB reads per call, tool result tells you where to resume if truncated.")]
-    public static async Task<string> ReadFileTextRange([Description("The ID of the file to read.")] string fileId, [Description("1-based indexing.")] int startLine, [Description("Omit this to read to end of file. Prefer including when known.")] int? endLine = null, [Description("1-based content column to start reading from, on the first line of the range only. Subsequent lines read from column 1. Default 1. The first line's read window is [startColumn, startColumn + columnLimit).")] int startColumn = 1, [Description("Number of content columns to read per line, measured from the line's start column (startColumn on the first line, 1 on the rest). Omit or null to disable the limit.")] int? columnLimit = ReadFileTextRangeMaxBytes, [Description("Set true to prefix each line content with its exact line number as [LX]. Disable when only gist is being read rather than verbatim details being read/written.")] bool prefixLineNumbers = true)
+    public static async Task<string> Read([Description("The ID of the file to read.")] string fileId, [Description("1-based indexing.")] int startLine, [Description("Omit this to read to end of file. Prefer including when known.")] int? endLine = null, [Description("1-based content column to start reading from, on the first line of the range only. Subsequent lines read from column 1. Default 1. The first line's read window is [startColumn, startColumn + columnLimit).")] int startColumn = 1, [Description("Number of content columns to read per line, measured from the line's start column (startColumn on the first line, 1 on the rest). Omit or null to disable the limit.")] int? columnLimit = ReadFileTextRangeMaxBytes, [Description("Set true to prefix each line content with its exact line number as [LX]. Disable when only gist is being read rather than verbatim details being read/written.")] bool prefixLineNumbers = true)
     {
         var cancellationToken = CancellationToken.None;
         try
@@ -1027,7 +1027,7 @@ public static class StorageTools
     }
 
     [Description("Gets information about seen storable items by its ID, including custom mount aliases. Recommended for precise ranged read/write windows or for incremental/re-reads to discern updates or appends. Yields ID, name, storage type, size in bytes, line count, and datetime property metadata.")]
-    public static async Task<StorableInfoResult[]> GetStorableInfos(string[] ids)
+    public static async Task<StorableInfoResult[]> Info(string[] ids)
     {
         var results = new List<StorableInfoResult>();
         foreach (var id in ids)
@@ -1124,7 +1124,7 @@ public static class StorageTools
     }
 
     [Description("Gets the root folder of a given storage item id.")]
-    public static async Task<StorableItemResult?> GetRootFolder(string itemId)
+    public static async Task<StorableItemResult?> Root(string itemId)
     {
         var cancellationToken = CancellationToken.None;
         try
@@ -1165,7 +1165,7 @@ public static class StorageTools
     }
 
     [Description("Gets the parent folder of a storage item.")]
-    public static async Task<StorableItemResult?> GetParentFolder(string itemId)
+    public static async Task<StorableItemResult?> Parent(string itemId)
     {
         var cancellationToken = CancellationToken.None;
         try
@@ -1206,7 +1206,7 @@ public static class StorageTools
     }
 
     [Description("Lists all supported storage protocols and their capabilities (mfs, memory, http, ipfs, ipns, custom mounted ID aliases, etc.). Use these `scheme://` IDs as starting points for GetItemByRelativePath navigation.")]
-    public static ProtocolInfoResult[] GetSupportedProtocols()
+    public static ProtocolInfoResult[] Protocols()
     {
         try
         {
@@ -1245,13 +1245,13 @@ public static class StorageTools
         catch (McpException) { throw; }
         catch (Exception ex)
         {
-            Logger.LogError($"{nameof(GetSupportedProtocols)} failed: {ex}", ex);
+            Logger.LogError($"{nameof(Protocols)} failed: {ex}", ex);
             throw new McpException($"Failed to get supported protocols: {ex.Message}", ex, McpErrorCode.InternalError);
         }
     }
 
     [Description("Mounts an existing folder OR supported archive file as a browsable drive with a custom protocol scheme. The mounted item will appear in available drives and can be browsed like any other drive.")]
-    public static async Task<MountResult> MountFolder(
+    public static async Task<MountResult> Mount(
         [Description("The ID or path of the folder or archive file to mount")] string folderId,
         [Description("The custom protocol scheme to use (e.g., 'myproject', 'backup', 'archive')")] string protocolScheme,
         [Description("Display name for the mounted item")] string mountName)
@@ -1307,7 +1307,7 @@ public static class StorageTools
     }
 
     [Description("Unmounts a previously mounted folder, removing it from available drives.")]
-    public static async Task<UnmountResult> UnmountFolder(
+    public static async Task<UnmountResult> Unmount(
         [Description("The protocol scheme of the mounted folder to unmount")] string protocolScheme)
     {
         try
@@ -1355,8 +1355,8 @@ public static class StorageTools
         }
     }
 
-    [Description("Lists all currently mounted folders and their information. Mounted folder `protocolScheme://`s are standalone IDs and are direct alias substitutes for other folder IDs (or file IDs in the case of archive folders). Use these mount `protocolScheme://` IDs as starting points for GetItemByRelativePath navigation.")]
-    public static async Task<MountedFolderInfo[]> GetMountedFolders()
+    [Description("Lists all currently mounted folders and their information. Mounted folder `protocolScheme://`s are standalone IDs and are direct alias substitutes for other folder IDs (or file IDs in the case of archive folders). Use these mount `protocolScheme://` IDs as starting points for navigation.")]
+    public static async Task<MountedFolderInfo[]> Mounts()
     {
         try
         {
@@ -1367,13 +1367,13 @@ public static class StorageTools
         catch (McpException) { throw; }
         catch (Exception ex)
         {
-            Logger.LogError($"{nameof(GetMountedFolders)} failed: {ex}", ex);
+            Logger.LogError($"{nameof(Mounts)} failed: {ex}", ex);
             throw new McpException($"Failed to get mounted folders: {ex.Message}", ex, McpErrorCode.InternalError);
         }
     }
 
-    [Description("Renames a mounted folder's protocol scheme and/or display name. Preserves all existing references and dependencies.")]
-    public static async Task<RenameMountResult> RenameMountedFolder(
+    [Description("Changes a mounted folder's protocol scheme and/or display name. Preserves all existing references and dependencies.")]
+    public static async Task<RenameMountResult> Remount(
         [Description("The current protocol scheme to rename")] string currentProtocolScheme,
         [Description("The new protocol scheme (optional, leave empty to keep current)")] string? newProtocolScheme = null,
         [Description("The new display name (optional, leave empty to keep current)")] string? newMountName = null)

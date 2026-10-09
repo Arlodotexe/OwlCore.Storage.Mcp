@@ -176,7 +176,7 @@ public static class EchoTool
 public static class TimeTool
 {
     [Description("Gets the current date and time.")]
-    public static string GetCurrentTime() => $"{DateTime.Now:D} {DateTime.Now:G}";
+    public static string Time() => $"{DateTime.Now:D} {DateTime.Now:G}";
 }
 
 // [McpServerToolType]
@@ -578,7 +578,7 @@ public static class FileLauncherTool
 public static class IpfsGetCidTool
 {
     [Description("Gets the Content Identifier (CID) for a file or folder. If the item isn't already addressable in IPFS, it will be added using provided options.")]
-    public static async Task<string> GetCidAsync(string fileId, bool? allowAdd = null, bool? pin = null, bool? onlyHash = null, int? cidVersion = null, bool? noCopy = null, bool? fsCache = null)
+    public static async Task<string> Cid(string fileId, bool? allowAdd = null, bool? pin = null, bool? onlyHash = null, int? cidVersion = null, bool? noCopy = null, bool? fsCache = null)
     {
         try
         {

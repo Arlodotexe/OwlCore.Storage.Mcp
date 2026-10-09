@@ -63,7 +63,7 @@ public static partial class StorageWriteTools
         }
     }
 
-    [Description("Creates a new file in the specified parent folder by ID or path. Content writes MUST be a second write_file_text or write_file_text_range tool call after creation.")]
+    [Description("Creates a new file in the specified parent folder by ID or path. Content writes MUST be a second write tool call after creation.")]
     public static async Task<StorableItemWithArchiveTypeResult> CreateFile(string parentFolderId, string fileName, bool overwrite = false)
     {
         var cancellationToken = CancellationToken.None;
@@ -141,7 +141,7 @@ public static partial class StorageWriteTools
     }
 
     [Description("Replaces lines in an existing file (use create_file first if it doesn't exist, prefer copy/move whenever possible, never ever *manually* read then write the same file text wholesale when move or copy is available as it's a fickle waste of time and compute). This is a replacement, never an insertion: the target line(s) are removed and your content takes their place; lines before and after the range are untouched. startLine (1-indexed, not 0-indexed) is the first line replaced. endLine (optional) is the inclusive LAST line of the range being replaced — the end of the target range, NOT where your written content ends up — and must satisfy startLine <= endLine <= line count. With no endLine the target range is exactly the single line at startLine. Strict by default: your content must have exactly the range's line count (replace N lines with N lines, preserving the file's total line count). If your content has MORE lines than the range, pass allowMoreLines=true to grow the file; if FEWER, pass allowLessLines=true to shrink it. Passing both is rejected: a write either grows or shrinks, never both. An empty file counts as one line. There is no position past the last line; to append, replace the last line with its existing content plus your new lines and pass allowMoreLines=true (requires knowing the line count up front).")]
-    public static async Task<string> WriteFileTextRange(string fileId, string content, [Description("Single-line replace when endLine is omitted.")] int startLine, [Description("Omit to only replace at startLine.")] int? endLine = null, bool allowMoreLines = false, bool allowLessLines = false)
+    public static async Task<string> Write(string fileId, string content, [Description("Single-line replace when endLine is omitted.")] int startLine, [Description("Omit to only replace at startLine.")] int? endLine = null, bool allowMoreLines = false, bool allowLessLines = false)
     {
         SemaphoreSlim? fileSem = null;
         bool semAcquired = false;
@@ -225,14 +225,14 @@ public static partial class StorageWriteTools
         catch (McpException) { throw; }
         catch (Exception ex)
         {
-            Logger.LogError($"{nameof(WriteFileTextRange)} failed for '{fileId}': {ex}", ex);
+            Logger.LogError($"{nameof(Write)} failed for '{fileId}': {ex}", ex);
             throw new McpException($"Failed to write text range in '{fileId}': {ex.Message}", ex, McpErrorCode.InternalError);
         }
         finally { if (semAcquired) fileSem!.Release(); }
     }
 
     [Description("Guards or unguards a specific file write. Identical semantics to find-- if a file is found by specific find param values, then those param values can be safely reused here.")]
-    public static async Task<string> FileWriteGuard([Description("The ID of the folder to match within.")] string folderId,
+    public static async Task<string> Guard([Description("The ID of the folder to match within.")] string folderId,
         [Description("\"add\", \"remove\", or \"list\"")] string action,
         [Description($"Glob patterns to match against each single storable file/folder's name along a path (NOT full path itself), use '*' to match any or no chars, '?' for single char, or '**' for recursive directory match. Examples: '*.cs', 'test*', '**/*.json', '*filename*'. Optional param, matches all storables recursively if excluded. Either this, {nameof(fileContentRegex)}, or both must be included and non-empty.")] string[]? nameGlobs = null,
         [Description($"Regex pattern to match within file contents. Only files are content-matched. Matched lines are returned with line numbers. Optional param, surfaces storables but not content if excluded. Either this, {nameof(nameGlobs)} or both must be included and non-empty.")] string? fileContentRegex = null
@@ -294,7 +294,7 @@ public static partial class StorageWriteTools
         catch (McpException) { throw; }
         catch (Exception ex)
         {
-            Logger.LogError($"{nameof(FileWriteGuard)} failed", ex);
+            Logger.LogError($"{nameof(Guard)} failed", ex);
             throw new McpException($"Failed to run guard command: {ex.Message}", ex, McpErrorCode.InternalError);
         }
     }
@@ -380,7 +380,7 @@ public static partial class StorageWriteTools
 
 
     [Description("Deletes a file or folder by ID or path from its parent folder.")]
-    public static async Task<string> DeleteItem(string parentFolderId, string itemName)
+    public static async Task<string> Delete(string parentFolderId, string itemName)
     {
         var cancellationToken = CancellationToken.None;
         try
@@ -413,7 +413,7 @@ public static partial class StorageWriteTools
     }
 
     [Description("Creates a copy of any file or folder in the specified target folder. Works across all supported protocols.")]
-    public static async Task<StorableItemResult> CopyItem(string sourceItemId, string targetParentFolderId, string? newName = null, [Description("Prefer overwriting instead of deleting the target first.")] bool overwrite = false)
+    public static async Task<StorableItemResult> Copy(string sourceItemId, string targetParentFolderId, string? newName = null, [Description("Prefer overwriting instead of deleting the target first.")] bool overwrite = false)
     {
         var cancellationToken = CancellationToken.None;
         try
@@ -529,7 +529,7 @@ public static partial class StorageWriteTools
     }
 
     [Description("Moves a file or folder from source folder to target folder using efficient move operations.")]
-    public static async Task<StorableItemResult> MoveItem(string sourceItemId, string sourceFolderId, string targetParentFolderId, string? newName = null, [Description("Prefer overwriting instead of deleting the target first.")] bool overwrite = false)
+    public static async Task<StorableItemResult> Move(string sourceItemId, string sourceFolderId, string targetParentFolderId, string? newName = null, [Description("Prefer overwriting instead of deleting the target first.")] bool overwrite = false)
     {
         var cancellationToken = CancellationToken.None;
         try
@@ -655,7 +655,7 @@ public static partial class StorageWriteTools
 
 
     [Description("Creates any missing folders along a relative path from a starting item. If the last segment contains a dot and no trailing slash, it's treated as a file and the parent of the leaf is created. Supports '.' and '..' segments.")]
-    public static async Task<StorableItemResult> CreateRelativeFolderPath(string startingItemId, string relativePath, bool overwrite = false)
+    public static async Task<StorableItemResult> CreateFolderRelative(string startingItemId, string relativePath, bool overwrite = false)
     {
         var cancellationToken = CancellationToken.None;
         try
