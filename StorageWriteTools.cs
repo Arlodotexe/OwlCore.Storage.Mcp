@@ -412,7 +412,7 @@ public static partial class StorageWriteTools
         }
     }
 
-    [Description("Creates a copy of any file or folder in the specified target folder. Works across all supported protocols.")]
+    [Description("Creates a copy of any file or folder in the specified target folder. Works across all supported protocols. Creates the target if it does not exist.")]
     public static async Task<StorableItemResult> Copy(string sourceItemId, string targetParentFolderId, string? newName = null, [Description("Prefer overwriting instead of deleting the target first.")] bool overwrite = false)
     {
         var cancellationToken = CancellationToken.None;
@@ -528,7 +528,7 @@ public static partial class StorageWriteTools
         }
     }
 
-    [Description("Moves a file or folder from source folder to target folder using efficient move operations.")]
+    [Description("Moves a file or folder from source folder to target folder using efficient move operations. Creates the target if it does not exist.")]
     public static async Task<StorableItemResult> Move(string sourceItemId, string sourceFolderId, string targetParentFolderId, string? newName = null, [Description("Prefer overwriting instead of deleting the target first.")] bool overwrite = false)
     {
         var cancellationToken = CancellationToken.None;
