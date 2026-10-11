@@ -495,8 +495,8 @@ public static class FileLauncherTool
                     Pid: process.Id,
                     Mode: fileIdStartMode.ToString(),
                     ExitCode: -1,
-                    Stdout: string.IsNullOrEmpty(stdout) ? null : TrimToMaxByteLength(stdout, thisProcessRunDir.Id, "stdout", stdoutFile.Id),
-                    Stderr: string.IsNullOrEmpty(stderr) ? null : TrimToMaxByteLength(stderr, thisProcessRunDir.Id, "stderr", stderrFile.Id),
+                    Stdout: string.IsNullOrEmpty(stdout) ? null : TrimToMaxByteLength(stdout, thisProcessRunDir.Id, "stdout", stdoutFile.Id, $"{process.Id}"),
+                    Stderr: string.IsNullOrEmpty(stderr) ? null : TrimToMaxByteLength(stderr, thisProcessRunDir.Id, "stderr", stderrFile.Id, $"{process.Id}"),
                     TimedOut: true,
                     Error: $"Process timed out after {processStartTimeoutMs}ms and was killed.",
                     ProcessStdioMemoryPersistFolderId: thisProcessRunDir.Id
@@ -507,8 +507,8 @@ public static class FileLauncherTool
                 Pid: process.Id,
                 Mode: fileIdStartMode.ToString(),
                 ExitCode: process.ExitCode,
-                Stdout: string.IsNullOrEmpty(stdout) ? null : TrimToMaxByteLength(stdout, thisProcessRunDir.Id, "stdout", stdoutFile.Id),
-                Stderr: string.IsNullOrEmpty(stderr) ? null : TrimToMaxByteLength(stderr, thisProcessRunDir.Id, "stderr", stderrFile.Id),
+                Stdout: string.IsNullOrEmpty(stdout) ? null : TrimToMaxByteLength(stdout, thisProcessRunDir.Id, "stdout", stdoutFile.Id, $"{process.Id}"),
+                Stderr: string.IsNullOrEmpty(stderr) ? null : TrimToMaxByteLength(stderr, thisProcessRunDir.Id, "stderr", stderrFile.Id, $"{process.Id}"),
                 TimedOut: false,
                 ProcessStdioMemoryPersistFolderId: thisProcessRunDir.Id
             );
@@ -525,7 +525,7 @@ public static class FileLauncherTool
 
 
     private const int StartStdioRangeMaxBytes = 4 * 1024 - 192; // 8 KB divided by two (stderr+stdout) minus overhead for truncation message
-    private static string TrimToMaxByteLength(string content, string processRunRelPathDir, string trimmedContentKind, string fullPersistedFileId)
+    private static string TrimToMaxByteLength(string content, string processRunRelPathDir, string trimmedContentKind, string fullPersistedFileId, string pid)
     {
         var lines = content.Split(["\r\n", "\r", "\n"], StringSplitOptions.None);
         var result = string.Join('\n', lines);
@@ -544,7 +544,7 @@ public static class FileLauncherTool
                 var excludedLines = endLine - keep;
                 return trimmed
                     + $"\n\n[Output truncated to {StartStdioRangeMaxBytes} bytes. "
-                    + $"{excludedLines} lines excluded. Read fileId `{fullPersistedFileId}` (or list/find in folderId `{processRunRelPathDir}` globbed at relative path `./{trimmedContentKind}`) from startLine {keep + 1} to continue.]";
+                    + $"{excludedLines} lines excluded. Read fileId `{fullPersistedFileId}` (or list/find in exact folderId `{processRunRelPathDir}` globbed by name `{trimmedContentKind}`, or navigate manually to `memory://tools/start/[some_pid]/`) from startLine {keep + 1} to continue.]";
             }
             keep--;
         }
