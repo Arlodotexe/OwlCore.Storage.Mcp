@@ -140,8 +140,8 @@ public static partial class StorageWriteTools
         }
     }
 
-    [Description("Replaces lines in an existing file (use create_file first if it doesn't exist, prefer copy/move whenever possible, never ever *manually* read then write the same file text wholesale when move or copy is available as it's a fickle waste of time and compute). This is a replacement, never an insertion: the target line(s) are removed and your content takes their place; lines before and after the range are untouched. startLine (1-indexed, not 0-indexed) is the first line replaced. endLine (optional) is the inclusive LAST line of the range being replaced — the end of the target range, NOT where your written content ends up — and must satisfy startLine <= endLine <= line count. With no endLine the target range is exactly the single line at startLine. Strict by default: your content must have exactly the range's line count (replace N lines with N lines, preserving the file's total line count). If your content has MORE lines than the range, pass allowMoreLines=true to grow the file; if FEWER, pass allowLessLines=true to shrink it. Passing both is rejected: a write either grows or shrinks, never both. An empty file counts as one line. There is no position past the last line; to append, replace the last line with its existing content plus your new lines and pass allowMoreLines=true (requires knowing the line count up front).")]
-    public static async Task<string> Write(string fileId, string content, [Description("Single-line replace when endLine is omitted.")] int startLine, [Description("Omit to only replace at startLine.")] int? endLine = null, bool allowMoreLines = false, bool allowLessLines = false)
+    [Description("Replaces lines in an existing file (use create_file first if it doesn't exist, prefer copy/move whenever possible, never ever *manually* read then write the same file text wholesale when move or copy is available as it's a fickle waste of time/compute). This is a replacement, never an insertion: the target line(s) are removed and your content takes their place; lines before and after the range are untouched. startLine (1-indexed, not 0-indexed) is the first line replaced. endLine is the inclusive LAST line of the range being replaced — the end of the target range, NOT where your written content ends up (unless same as startLine) — and must satisfy startLine <= endLine <= line count. Strict by default: your content must have exactly the line count of the target range to replace N lines with N lines preserving the file's total line count, or if your content has MORE lines than the target range, pass allowMoreLines=true to grow the file; if FEWER, pass allowLessLines=true to shrink it. Passing both is rejected: a write either grows or shrinks, never both. An empty file counts as one line. There is no position past the last line; to append, replace the last line with its existing content plus your new lines and pass allowMoreLines=true (requires knowing current line count up front).")]
+    public static async Task<string> Write(string fileId, string content, int startLine, int endLine, bool allowMoreLines = false, bool allowLessLines = false)
     {
         SemaphoreSlim? fileSem = null;
         bool semAcquired = false;
@@ -165,9 +165,9 @@ public static partial class StorageWriteTools
             if (startLine < 1 || startLine > lines.Length)
                 throw new McpException($"Invalid startLine: {startLine}. Stop blindly writing and use get_storable_info up front for line count. Must be between 1 and {lines.Length} (file '{file.Name}' has {lines.Length} lines)", McpErrorCode.InvalidParams);
 
-            // endLine is the inclusive end of the range being overwritten. Omitted => the single line at startLine.
+            // endLine is the inclusive end of the range being overwritten. Should never be omitted, confuses smaller models into thinking it's an "insert". 
             // The range is never empty and never inverted: startLine <= endLine <= line count.
-            int effectiveEndLine = endLine ?? startLine;
+            int effectiveEndLine = endLine;
             if (effectiveEndLine < startLine || effectiveEndLine > lines.Length)
                 throw new McpException($"Invalid endLine: {effectiveEndLine}. Stop blindly writing and use get_storable_info up front for line count. Must be between {startLine} and {lines.Length} (file '{file.Name}' has {lines.Length} lines)", McpErrorCode.InvalidParams);
 
