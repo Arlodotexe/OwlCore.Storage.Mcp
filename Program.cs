@@ -231,6 +231,7 @@ public static class FileLauncherTool
         [Description($"Text to write to stdin. Only used with {nameof(StartMode)}.{nameof(StartMode.ExecuteShellBinary)}.")] string? processStdin = null,
         [Description($"Timeout in ms for {nameof(StartMode)}.{nameof(StartMode.ExecuteShellBinary)}. Default 30000. Ignored for {nameof(StartMode)}.{nameof(StartMode.LaunchGraphicalApplication)}.")] int processStartTimeoutMs = 30000,
         [Description($"Shell verb for {nameof(StartMode)}.{nameof(StartMode.LaunchGraphicalApplication)} (e.g. 'open'). Ignored for {nameof(StartMode)}.{nameof(StartMode.ExecuteShellBinary)}.")] string? processStartVerb = null,
+        [Description("When async is true, the tool call will not wait for the process to exit before returning. Instead, the mcp server child process stays alive in the background with stdio routed to `memory://tools/start/{pid}/` (aka ProcessStdioMemoryPersistFolderId) until it exits or is killed.")] bool async = false,
         [Description("Whether to overwrite the local copy of a started non-local file. Default false.")] bool overwrite = false)
     {
         try
@@ -411,7 +412,7 @@ public static class FileLauncherTool
                     ?? Path.GetTempPath(),
             };
 
-            using var process = Process.Start(psi);
+            var process = Process.Start(psi);
             if (process == null)
                 throw new McpException($"Failed to start process: '{fileId}'", McpErrorCode.InternalError);
 
@@ -440,45 +441,46 @@ public static class FileLauncherTool
             process.StandardInput.Close();
 
             var stdoutSourceFile = new StreamFile(process.StandardOutput.BaseStream) { ShouldDispose = true };
+            var stdoutFile = await thisProcessRunDir.CreateFileAsync("stdout", overwrite: true, default);
             var stdoutTask = thisProcessRunDir.CreateCopyOfAsync(stdoutSourceFile, overwrite: true, "stdout", default);
 
             var stderrSourceFile = new StreamFile(process.StandardError.BaseStream) { ShouldDispose = true };
+            var stderrFile = await thisProcessRunDir.CreateFileAsync("stderr", overwrite: true, default);
             var stderrTask = thisProcessRunDir.CreateCopyOfAsync(stderrSourceFile, overwrite: true, "stderr", default);
 
-            var processCompletionTask = Task.WhenAll(stdoutTask, stderrTask, process.WaitForExitAsync());
-            var timedOut = await Task.WhenAny(processCompletionTask, Task.Delay(processStartTimeoutMs)) != processCompletionTask;
-
-            if (timedOut)
+            bool timedOut = false;
+            if (!async)
             {
-                try { process.Kill(entireProcessTree: true); } catch { }
+                var processCompletionTask = Task.WhenAll(stdoutTask, stderrTask, process.WaitForExitAsync());
+                var completedTask = await Task.WhenAny(processCompletionTask, Task.Delay(processStartTimeoutMs));
+                timedOut = completedTask != processCompletionTask;
 
-                try { await processCompletionTask.WaitAsync(TimeSpan.FromSeconds(5)); } catch { }
-
-                if (!processCompletionTask.IsCompleted)
+                if (timedOut)
                 {
-                    try { process.StandardOutput.Close(); } catch { }
-                    try { process.StandardError.Close(); } catch { }
-                    try { await processCompletionTask.WaitAsync(TimeSpan.FromSeconds(1)); } catch { }
+                    try { process.Kill(entireProcessTree: true); } catch { }
+
+                    try { await processCompletionTask.WaitAsync(TimeSpan.FromSeconds(5)); } catch { }
+
+                    if (!processCompletionTask.IsCompleted)
+                    {
+                        try { process.StandardOutput.Close(); } catch { }
+                        try { process.StandardError.Close(); } catch { }
+                        try { await processCompletionTask.WaitAsync(TimeSpan.FromSeconds(1)); } catch { }
+                    }
+                }
+                else
+                {
+                    await processCompletionTask;
                 }
             }
-            else
-            {
-                await processCompletionTask;
-            }
-            
-            var stdoutFile = await stdoutTask;
-            var stdout = stdoutTask.IsCompletedSuccessfully ? await stdoutFile.ReadTextAsync() : null;
-            
-            var stderrFile = await stderrTask;
-            var stderr = stderrTask.IsCompletedSuccessfully ? await stderrFile.ReadTextAsync() : null;
 
             var stdinFile = await thisProcessRunDir.CreateFileAsync("stdin", overwrite: true, default);
 
             var cwdFile = await thisProcessRunDir.CreateFileAsync("cwd", overwrite: true, default);
             var binaryPathFile = await thisProcessRunDir.CreateFileAsync("bin", overwrite: true, default);
             var argumentsFile = await thisProcessRunDir.CreateFileAsync("args", overwrite: true, default);
-            
-            await new IStorable[] {stdinFile, cwdFile, binaryPathFile, argumentsFile}.InParallel(RegisterStorableAsync);
+
+            await new IStorable[] { stdinFile, cwdFile, binaryPathFile, argumentsFile }.InParallel(RegisterStorableAsync);
 
             if (processStdin is not null)
                 await stdinFile.WriteTextAsync(processStdin);
@@ -489,8 +491,13 @@ public static class FileLauncherTool
             await binaryPathFile.WriteTextAsync(psi.FileName, default);
             await argumentsFile.WriteTextAsync(psi.Arguments, default);
 
+            var stdout = await stdoutFile.ReadTextAsync();
+            var stderr = await stderrFile.ReadTextAsync();
+
             if (timedOut)
             {
+                process.Dispose();
+
                 return new StartResult(
                     Pid: process.Id,
                     Mode: fileIdStartMode.ToString(),
@@ -506,7 +513,7 @@ public static class FileLauncherTool
             return new StartResult(
                 Pid: process.Id,
                 Mode: fileIdStartMode.ToString(),
-                ExitCode: process.ExitCode,
+                ExitCode: async ? null : process.ExitCode,
                 Stdout: string.IsNullOrEmpty(stdout) ? null : TrimToMaxByteLength(stdout, thisProcessRunDir.Id, "stdout", stdoutFile.Id, $"{process.Id}"),
                 Stderr: string.IsNullOrEmpty(stderr) ? null : TrimToMaxByteLength(stderr, thisProcessRunDir.Id, "stderr", stderrFile.Id, $"{process.Id}"),
                 TimedOut: false,
@@ -525,7 +532,7 @@ public static class FileLauncherTool
 
 
     private const int StartStdioRangeMaxBytes = 4 * 1024 - 192; // 8 KB divided by two (stderr+stdout) minus overhead for truncation message
-    private static string TrimToMaxByteLength(string content, string processRunRelPathDir, string trimmedContentKind, string fullPersistedFileId, string pid)
+    private static string TrimToMaxByteLength(string content, string processRunRelPathDir, string trimmedContentKind, string? fullPersistedFileId, string pid)
     {
         var lines = content.Split(["\r\n", "\r", "\n"], StringSplitOptions.None);
         var result = string.Join('\n', lines);
@@ -544,7 +551,7 @@ public static class FileLauncherTool
                 var excludedLines = endLine - keep;
                 return trimmed
                     + $"\n\n[Output truncated to {StartStdioRangeMaxBytes} bytes. "
-                    + $"{excludedLines} lines excluded. Read {trimmedContentKind} from exact fileId `{fullPersistedFileId}` (or list/find in exact folderId `{processRunRelPathDir}` globbed by name `{trimmedContentKind}`, or navigate manually to and from its parent `memory://tools/start/{pid}/`) from startLine {keep + 1} to continue.]";
+                    + $"{excludedLines} lines excluded. Read {fullPersistedFileId} in exact folderId `{processRunRelPathDir}` by name `{trimmedContentKind}`, or navigate manually to and from its parent `memory://tools/start/{pid}/`, with startLine {keep + 1} to continue.]";
             }
             keep--;
         }
@@ -559,7 +566,7 @@ public static class FileLauncherTool
         var resumeColumn = prefix.Length + 1; // 1-based column: first char after the inline partial view
         return prefix
             + $"\n\n[Output truncated to {StartStdioRangeMaxBytes} bytes: line 1 alone exceeds the limit, the line above is a partial view. "
-            + $"Read fileId `{fullPersistedFileId}` (`./{trimmedContentKind}` in folderId `{processRunRelPathDir}`) from startLine 1, startColumn {resumeColumn} to continue — the persisted file contains the complete line.]";
+            + $"Read {fullPersistedFileId} `./{trimmedContentKind}` in folderId `{processRunRelPathDir}` from startLine 1, startColumn {resumeColumn} to continue.]";
     }
 
     private static async Task RegisterStorableAsync(IStorable storable)
