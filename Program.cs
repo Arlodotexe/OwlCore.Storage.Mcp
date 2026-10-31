@@ -231,7 +231,7 @@ public static class FileLauncherTool
         [Description($"Text to write to stdin. Only used with {nameof(StartMode)}.{nameof(StartMode.ExecuteShellBinary)}.")] string? processStdin = null,
         [Description($"Timeout in ms for {nameof(StartMode)}.{nameof(StartMode.ExecuteShellBinary)}. Default 30000. Ignored for {nameof(StartMode)}.{nameof(StartMode.LaunchGraphicalApplication)}.")] int processStartTimeoutMs = 30000,
         [Description($"Shell verb for {nameof(StartMode)}.{nameof(StartMode.LaunchGraphicalApplication)} (e.g. 'open'). Ignored for {nameof(StartMode)}.{nameof(StartMode.ExecuteShellBinary)}.")] string? processStartVerb = null,
-        [Description("When async is true, the tool call will not wait for the process to exit before returning. Instead, the mcp server child process stays alive in the background with stdio routed to `memory://tools/start/{pid}/` (aka ProcessStdioMemoryPersistFolderId) until it exits or is killed.")] bool async = false,
+        [Description("When async is true, the tool call will not wait for the process to exit before returning. Instead, the mcp server child process stays alive in the background with stdio routed to `memory://tools/start/{pid}/` (or children of exact folderId = `ProcessStdioMemoryPersistFolderId`) until it exits or is killed.")] bool async = false,
         [Description("Whether to overwrite the local copy of a started non-local file. Default false.")] bool overwrite = false)
     {
         try
