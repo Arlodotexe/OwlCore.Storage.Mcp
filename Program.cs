@@ -175,8 +175,16 @@ public static class EchoTool
 
 public static class TimeTool
 {
-    [Description("Gets the current date and time.")]
-    public static string Time() => $"{DateTime.Now:D} {DateTime.Now:G}";
+    [Description("Gets the current date and time, optionally after a delay.")]
+    public static async Task<string> Time([Description("If not null, sleeps this duration then reports time after delay.")] int? sleepMs)
+    {
+        if (sleepMs is not null)
+        {
+            await Task.Delay(sleepMs.Value);
+        }
+
+        return $"{DateTime.Now:D} {DateTime.Now:G}";
+    }
 }
 
 // [McpServerToolType]
