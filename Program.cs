@@ -22,12 +22,14 @@ using Ipfs.CoreApi;
 using CommunityToolkit.Diagnostics;
 using System.Runtime.InteropServices;
 using OwlCore.Storage.Memory;
+using System.Threading.RateLimiting;
 
 var startTime = DateTime.Now;
 
 // Cancellation
 var cancellationTokenSource = new CancellationTokenSource();
 var cancellationToken = cancellationTokenSource.Token;
+McpServerShutdownTool.CancellationTokenSource = cancellationTokenSource;
 
 Console.CancelKeyPress += (sender, eventArgs) =>
 {
@@ -68,6 +70,7 @@ var tools = new List<McpServerTool>();
 RegisterToolsFrom(typeof(StorageTools), toolOptions, tools);
 RegisterToolsFrom(typeof(StorageWriteTools), toolOptions, tools);
 RegisterToolsFrom(typeof(TimeTool), toolOptions, tools);
+RegisterToolsFrom(typeof(McpServerShutdownTool), toolOptions, tools);
 RegisterToolsFrom(typeof(FileLauncherTool), toolOptions, tools);
 RegisterToolsFrom(typeof(IpfsGetCidTool), toolOptions, tools);
 
@@ -173,17 +176,87 @@ public static class EchoTool
     public static string Echo(string message) => $"hello {message}";
 }
 
-public static class TimeTool
+public static class McpServerShutdownTool
 {
-    [Description("Gets the current date and time, optionally after a delay.")]
-    public static async Task<string> Time([Description("If not null, sleeps this duration then reports time after delay.")] int? sleepMs)
+    public static CancellationTokenSource? CancellationTokenSource { get; set; }
+
+    [Description("Shuts down the entire OwlCore.Storage MCP server. The MCP client harness may or may not support auto-restart.")]
+    public static void Shutdown([Description("Some harnesses need a non-graceful exit with an error code to auto-restart. Do not guess, ask if not known, ask to proceduralize once known.")] bool nonGraceful)
     {
-        if (sleepMs is not null)
+        if (nonGraceful)
         {
-            await Task.Delay(sleepMs.Value);
+            Environment.Exit(-1);
+            return;
         }
 
-        return $"{DateTime.Now:D} {DateTime.Now:G}";
+        Guard.IsNotNull(CancellationTokenSource);
+        CancellationTokenSource.Cancel();
+    }
+}
+
+public static class TimeTool
+{
+    private static RateLimiter _timeCallRateLimiter = new SlidingWindowRateLimiter(new()
+    {
+        AutoReplenishment = true,
+        PermitLimit = 1,
+        QueueLimit = 0,
+        SegmentsPerWindow = 60,
+        Window = TimeSpan.FromSeconds(60),
+    });
+
+    [Description("Gets the current date and time, optionally after a delay. Rate limited to one time check per minute.")]
+    public static async Task<string> Time([Description("If not null, sleeps this duration then reports time after delay. Minimum 5s, exclude/null for instant time check.")] int? sleepMs = null)
+    {
+        try
+        {
+            if (sleepMs is { } sleepMsVal)
+            {
+                // Use new variable name so name doesn't appear as ".Value" from nullable. 
+                Guard.IsGreaterThanOrEqualTo(sleepMsVal, 5000);
+            }
+
+            // Ensure caller does not spam time checks
+            using var rateLimitInnerLease = _timeCallRateLimiter.AttemptAcquire();
+            if (!rateLimitInnerLease.IsAcquired)
+            {
+                var rateLimitedMsg = $"Rate limited: You've called the time tool too quickly";
+                var retryMsg = "Please orient intension without spam, wait, and try again later";
+                var sleepMsg = sleepMs is not null ? "Sleep request not honored" : "";
+
+                string[] exMsgs = sleepMs is not null ? [rateLimitedMsg, sleepMsg, retryMsg] : [rateLimitedMsg, retryMsg];
+                throw new McpException(string.Join(". ", exMsgs));
+            }
+
+            var preDelay = $"{DateTime.Now:D} {DateTime.Now:G}";
+
+            if (sleepMs is not null)
+            {
+                await Task.Delay(sleepMs.Value);
+            }
+
+            var postDelay = $"{DateTime.Now:D} {DateTime.Now:G}";
+            if (sleepMs is not null)
+            {
+                return $"""
+            Before sleep: {preDelay}
+            Now: {postDelay}
+            """;
+            }
+            else
+            {
+                return $"{postDelay}";
+            }
+        }
+        catch (McpException) { throw; }
+        catch (ArgumentException ex)
+        {
+            throw new McpException($"Failed: {ex.Message}", ex, McpErrorCode.InvalidParams);
+        }
+        catch (Exception ex)
+        {
+            throw new McpException($"Failed: {ex.Message}", ex, McpErrorCode.InternalError);
+        }
     }
 }
 

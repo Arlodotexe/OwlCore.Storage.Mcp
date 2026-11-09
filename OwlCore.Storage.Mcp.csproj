@@ -16,5 +16,6 @@
     <PackageReference Include="OwlCore.Kubo" Version="0.22.4" />
     <PackageReference Include="OwlCore.Storage" Version="0.15.1" />
     <PackageReference Include="OwlCore.Storage.SharpCompress" Version="0.2.0" />
+    <PackageReference Include="System.Threading.RateLimiting" Version="10.0.14" />
   </ItemGroup>
 </Project>
