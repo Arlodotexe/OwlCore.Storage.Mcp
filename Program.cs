@@ -199,13 +199,13 @@ public static class TimeTool
     private static RateLimiter _timeCallRateLimiter = new SlidingWindowRateLimiter(new()
     {
         AutoReplenishment = true,
-        PermitLimit = 1,
+        PermitLimit = 2,
         QueueLimit = 0,
         SegmentsPerWindow = 60,
         Window = TimeSpan.FromSeconds(60),
     });
 
-    [Description("Gets the current date and time, optionally after a delay. Rate limited to one time check per minute.")]
+    [Description("Gets the current date and time, optionally after a delay. Rate limited to two time checks per sliding minute window.")]
     public static async Task<string> Time([Description("If not null, sleeps this duration then reports time after delay. Minimum 5s, exclude/null for instant time check.")] int? sleepMs = null)
     {
         try
