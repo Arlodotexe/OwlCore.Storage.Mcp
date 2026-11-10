@@ -214,6 +214,7 @@ public static class TimeTool
             {
                 // Use new variable name so name doesn't appear as ".Value" from nullable. 
                 Guard.IsGreaterThanOrEqualTo(sleepMsVal, 5000);
+                Guard.IsLessThanOrEqualTo(sleepMsVal, 60000);
             }
 
             // Ensure caller does not spam time checks
