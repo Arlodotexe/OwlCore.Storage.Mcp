@@ -918,7 +918,7 @@ public static class StorageTools
     private const int ReadFileTextRangeMaxBytes = 8 * 1024 - 192; // 8 KB minus overhead for truncation message
 
     [Description("Reads file text from http, https, local storage, memory, ipfs, ipns, mfs, and all other supported protocols. Max 8KB reads per call, tool result tells you where to resume if truncated.")]
-    public static async Task<string> Read([Description("The ID of the file to read.")] string fileId, [Description("1-based indexing.")] int startLine, [Description("Omit this to read to end of file. Prefer including when known.")] int? endLine = null, [Description("1-based content column to start reading from, on the first line of the range only. Subsequent lines read from column 1. Default 1. The first line's read window is [startColumn, startColumn + columnLimit).")] int startColumn = 1, [Description("Number of content columns to read per line, measured from the line's start column (startColumn on the first line, 1 on the rest). Omit or null to disable the limit.")] int? columnLimit = ReadFileTextRangeMaxBytes, [Description("Set true to prefix each line content with its exact line number as [LX]. Disable when only gist is being read rather than verbatim details being read/written.")] bool prefixLineNumbers = true)
+    public static async Task<string> Read([Description("The ID of the file to read.")] string fileId, [Description("1-based indexing.")] int startLine, [Description("Omit this to read to end of file. Prefer including when known.")] int? endLine = null, [Description("1-based content column to start reading from, on the first line of the range only. Subsequent lines read from column 1. Default 1. The first line's read window is [startColumn, startColumn + columnLimit).")] int startColumn = 1, [Description("Number of content columns to read per line, measured from the line's start column (startColumn on the first line, 1 on the rest). Omit or null to disable the limit.")] int? columnLimit = null, [Description("Defaults to 8KB minus overhead for truncation messages. Client may truncate away continuation message without notice if too large.")] int maxBytes = ReadFileTextRangeMaxBytes, [Description("Set true to prefix each line content with its exact line number as [LX]. Disable when only gist is being read rather than verbatim details being read/written.")] bool prefixLineNumbers = true)
     {
         var cancellationToken = CancellationToken.None;
         try
@@ -985,7 +985,7 @@ public static class StorageTools
 
             var result = string.Join('\n', selectedLines);
 
-            if (Encoding.UTF8.GetByteCount(result) <= ReadFileTextRangeMaxBytes)
+            if (Encoding.UTF8.GetByteCount(result) <= maxBytes)
                 return result;
 
             // Trim lines until we're under the limit
@@ -993,11 +993,11 @@ public static class StorageTools
             while (keep > 1)
             {
                 var trimmed = string.Join('\n', selectedLines[..keep]);
-                if (Encoding.UTF8.GetByteCount(trimmed) <= ReadFileTextRangeMaxBytes)
+                if (Encoding.UTF8.GetByteCount(trimmed) <= maxBytes)
                 {
                     var excludedLines = actualEndLine - (startLine - 1 + keep);
                     return trimmed
-                        + $"\n\n[Output truncated to {ReadFileTextRangeMaxBytes} bytes. "
+                        + $"\n\n[Output truncated to {maxBytes} bytes. "
                         + $"{excludedLines} lines excluded from requested range. Read from startLine {startLine + keep} to continue.]";
                 }
                 keep--;
@@ -1009,11 +1009,11 @@ public static class StorageTools
             int contentOffset = prefixLineNumbers ? firstLine.IndexOf(']') + 1 : 0;
             var firstContent = firstLine[contentOffset..];
             var bytes = Encoding.UTF8.GetBytes(firstContent);
-            int cut = Math.Min(bytes.Length, ReadFileTextRangeMaxBytes - 256 - contentOffset);
+            int cut = Math.Min(bytes.Length, maxBytes - 256 - contentOffset);
             while (cut > 0 && (bytes[cut] & 0xC0) == 0x80) cut--; // back off to a char boundary
             var cutContent = Encoding.UTF8.GetString(bytes[..cut]);
             return firstLine[..contentOffset] + cutContent
-                + $"\n\n[Output truncated to {ReadFileTextRangeMaxBytes} bytes: line {startLine} alone exceeds the limit, the line above is a partial view. "
+                + $"\n\n[Output truncated to {maxBytes} bytes: line {startLine} alone exceeds the limit, the line above is a partial view. "
                 + $"Read from startLine {startLine}, startColumn {cutContent.Length + 1} to continue — the file contains the complete line.]";
         }
         catch (McpException)
