@@ -201,11 +201,11 @@ public static class TimeTool
         AutoReplenishment = true,
         PermitLimit = 2, // 2 not 1 to allow for "check after nearby approaching deadline" comparison.
         QueueLimit = 0,
-        SegmentsPerWindow = 60,
-        Window = TimeSpan.FromSeconds(60),
+        SegmentsPerWindow = 60 * 2,
+        Window = TimeSpan.FromSeconds(60 * 2),
     });
 
-    [Description("Gets the current date and time, optionally after a delay. Rate limited to two time checks per sliding minute window. More than 1 per minute enables \"check after nearby approaching deadline\" comparison.")]
+    [Description("Gets the current date and time, optionally before and after a delay. Rate limited to two time checks per sliding window of size 2 minutes. Two checks per sliding window enables \"check after nearby approaching deadline\" comparison.")]
     public static async Task<string> Time([Description("If not null, sleeps this duration then reports time after delay. Minimum 5s, exclude/null for instant time check.")] int? sleepMs = null)
     {
         try
