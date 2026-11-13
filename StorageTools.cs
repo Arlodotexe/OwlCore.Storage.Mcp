@@ -804,8 +804,8 @@ public static class StorageTools
         return sb.ToString();
     }
 
-    [Description("Navigates to and gets an item using a relative path from a starting item id or named alias. Accepts both forward and backslashes. Relative path components must be storable names, not direct IDs.")]
-    public static async Task<StorableItemResult> Navigate(string startingItemId, string relativePath)
+    [Description("Navigates to and gets an item using a relative path from an exact starting item id or named `alias://`. ")]
+    public static async Task<StorableItemResult> Navigate([Description("An exact item ID or a named alias `likethis://`")] string startingItemId, [Description("A relative path from the startingItemId. Accepts both forward and backslashes. Must be composed of storable names, not direct IDs.")] string relativePath)
     {
         var cancellationToken = CancellationToken.None;
         try
